@@ -1,0 +1,19 @@
+{
+  "name": "@botpresshub/monday",
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "build": "bp add -y && bp build",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/sdk": "workspace:*"
+  },
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "axios": "^1.4.0"
+  }
+}

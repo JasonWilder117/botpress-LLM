@@ -1,20 +1,7 @@
 import * as sdk from '@botpress/sdk'
 import { z } from '@botpress/sdk'
+import { messages } from './definitions/channels/messages'
 import { apiVersion } from './src/gen/version'
-
-const metadata = z.record(z.any()).optional()
-const text = { schema: sdk.messages.defaults.text.schema.extend({ metadata }) }
-const image = { schema: sdk.messages.defaults.image.schema.extend({ metadata }) }
-const audio = { schema: sdk.messages.defaults.audio.schema.extend({ metadata }) }
-const video = { schema: sdk.messages.defaults.video.schema.extend({ metadata }) }
-const file = { schema: sdk.messages.defaults.file.schema.extend({ metadata }) }
-const location = { schema: sdk.messages.defaults.location.schema.extend({ metadata }) }
-const carousel = { schema: sdk.messages.defaults.carousel.schema.extend({ metadata }) }
-const card = { schema: sdk.messages.defaults.card.schema.extend({ metadata }) }
-const dropdown = { schema: sdk.messages.defaults.dropdown.schema.extend({ metadata }) }
-const choice = { schema: sdk.messages.defaults.choice.schema.extend({ metadata }) }
-const bloc = { schema: sdk.messages.defaults.bloc.schema.extend({ metadata }) }
-const markdown = { schema: sdk.messages.markdown.schema.extend({ metadata }) }
 
 export default new sdk.IntegrationDefinition({
   name: 'chat',
@@ -51,9 +38,12 @@ export default new sdk.IntegrationDefinition({
       title: 'Custom Event',
       description: 'Custom event sent from the chat client to the bot',
       schema: z.object({
-        userId: z.string(),
-        conversationId: z.string(),
-        payload: z.record(z.any()),
+        userId: z.string().title('User ID').describe('The ID of the user who sent the custom event'),
+        conversationId: z
+          .string()
+          .title('Conversation ID')
+          .describe('The ID of the conversation where the event was sent'),
+        payload: z.record(z.any()).title('Payload').describe('Custom data payload sent with the event'),
       }),
     },
   },
@@ -63,8 +53,11 @@ export default new sdk.IntegrationDefinition({
       description: 'Send a custom event from the bot to the chat client',
       input: {
         schema: z.object({
-          conversationId: z.string(),
-          payload: z.record(z.any()),
+          conversationId: z
+            .string()
+            .title('Conversation ID')
+            .describe('The ID of the conversation to send the event to'),
+          payload: z.record(z.any()).title('Payload').describe('Custom data payload to send with the event'),
         }),
       },
       output: {
@@ -74,36 +67,25 @@ export default new sdk.IntegrationDefinition({
   },
   channels: {
     channel: {
+      title: 'Chat Channel',
+      description: 'Web chat channel for communicating with users via HTTP requests',
       conversation: {
         tags: {
           owner: { title: 'Conversation Owner', description: 'ID of the user who created the conversation' },
-          fid: { title: 'fid', description: 'This tag is of no use and only exists for historical reasons' },
+          fid: { title: 'Foreign ID', description: 'Copy of the foreign ID of the conversation' },
         },
       },
-      messages: {
-        text,
-        image,
-        audio,
-        video,
-        file,
-        location,
-        carousel,
-        card,
-        dropdown,
-        choice,
-        bloc,
-        markdown,
-      },
+      messages,
       message: {
         tags: {
-          fid: { title: 'fid', description: 'This tag is of no use and only exists for historical reasons' },
+          fid: { title: 'Foreign ID', description: 'This tag is of no use and only exists for historical reasons' },
         },
       },
     },
   },
   user: {
     tags: {
-      fid: { title: 'fid', description: 'This tag is of no use and only exists for historical reasons' },
+      fid: { title: 'Foreign ID', description: 'Copy of the foreign ID of the user' },
       profile: {
         title: 'User Profile',
         description: 'Custom profile data of the user encoded as a string',
@@ -128,5 +110,9 @@ export default new sdk.IntegrationDefinition({
       description: 'Base64 encoded JSON object containing the configuration for the foreign id store',
       optional: true,
     },
+  },
+  attributes: {
+    category: 'Communication & Channels',
+    repo: 'botpress',
   },
 })

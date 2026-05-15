@@ -36,7 +36,8 @@ type StateResponse<
     state: utils.Merge<
       Awaited<Res<client.Client['getState']>>['state'],
       {
-        payload: TBot['states'][TState]
+        type: utils.Cast<TBot['states'][TState]['type'], string>
+        payload: TBot['states'][TState]['payload']
       }
     >
   }
@@ -78,17 +79,6 @@ export type CreateMessage<TBot extends common.BaseBot> = <TMessage extends keyof
   >
 ) => Promise<MessageResponse<TBot, TMessage>>
 
-export type GetOrCreateMessage<TBot extends common.BaseBot> = <TMessage extends keyof common.GetMessages<TBot>>(
-  x: utils.Merge<
-    Arg<client.Client['getOrCreateMessage']>,
-    {
-      type: utils.Cast<TMessage, string>
-      payload: utils.Cast<common.GetMessages<TBot>[TMessage], Record<string, any>>
-      // TODO: use bot definiton message property to infer allowed tags
-    }
-  >
-) => Promise<MessageResponse<TBot, TMessage>>
-
 export type GetMessage<TBot extends common.BaseBot> = (
   x: Arg<client.Client['getMessage']>
 ) => Promise<MessageResponse<TBot>>
@@ -109,7 +99,8 @@ export type GetState<TBot extends common.BaseBot> = <TState extends keyof TBot['
   x: utils.Merge<
     Arg<client.Client['getState']>,
     {
-      name: utils.Cast<TState, string> // TODO: use state name to infer state type
+      name: utils.Cast<TState, string>
+      type: utils.Cast<TBot['states'][TState]['type'], string>
     }
   >
 ) => Promise<StateResponse<TBot, TState>>
@@ -118,8 +109,9 @@ export type SetState<TBot extends common.BaseBot> = <TState extends keyof TBot['
   x: utils.Merge<
     Arg<client.Client['setState']>,
     {
-      name: utils.Cast<TState, string> // TODO: use state name to infer state type
-      payload: TBot['states'][TState] | null
+      name: utils.Cast<TState, string>
+      type: utils.Cast<TBot['states'][TState]['type'], string>
+      payload: TBot['states'][TState]['payload'] | null
     }
   >
 ) => Promise<StateResponse<TBot, TState>>
@@ -128,8 +120,9 @@ export type GetOrSetState<TBot extends common.BaseBot> = <TState extends keyof T
   x: utils.Merge<
     Arg<client.Client['getOrSetState']>,
     {
-      name: utils.Cast<TState, string> // TODO: use state name to infer state type
-      payload: TBot['states'][TState]
+      name: utils.Cast<TState, string>
+      type: utils.Cast<TBot['states'][TState]['type'], string>
+      payload: TBot['states'][TState]['payload']
     }
   >
 ) => Promise<StateResponse<TBot, TState>>
@@ -138,18 +131,12 @@ export type PatchState<TBot extends common.BaseBot> = <TState extends keyof TBot
   x: utils.Merge<
     Arg<client.Client['patchState']>,
     {
-      name: utils.Cast<TState, string> // TODO: use state name to infer state type
-      payload: Partial<TBot['states'][TState]>
+      name: utils.Cast<TState, string>
+      type: utils.Cast<TBot['states'][TState]['type'], string>
+      payload: Partial<TBot['states'][TState]['payload']>
     }
   >
-) => Promise<{
-  state: utils.Merge<
-    Awaited<Res<client.Client['patchState']>>['state'],
-    {
-      payload: TBot['states'][TState]
-    }
-  >
-}>
+) => Promise<StateResponse<TBot, TState>>
 
 export type CallAction<TBot extends common.BaseBot> = <ActionType extends keyof common.EnumerateActions<TBot>>(
   x: utils.Merge<
@@ -192,6 +179,28 @@ export type CreateWorkflow<TBot extends common.BaseBot> = <TWorkflowName extends
   Readonly<{
     workflow: utils.Merge<
       Awaited<Res<client.Client['createWorkflow']>>['workflow'],
+      {
+        name: NoInfer<TWorkflowName>
+      }
+    >
+  }>
+>
+
+export type GetOrCreateWorkflow<TBot extends common.BaseBot> = <
+  TWorkflowName extends utils.StringKeys<TBot['workflows']>,
+>(
+  x: utils.Merge<
+    Arg<client.Client['getOrCreateWorkflow']>,
+    {
+      name: utils.Cast<TWorkflowName, string>
+      input: utils.Cast<TBot['workflows'][TWorkflowName], common.IntegrationInstanceActionDefinition>['input']
+      tags?: utils.AtLeastOneProperty<TBot['workflows'][TWorkflowName]['tags']>
+    }
+  >
+) => Promise<
+  Readonly<{
+    workflow: utils.Merge<
+      Awaited<Res<client.Client['getOrCreateWorkflow']>>['workflow'],
       {
         name: NoInfer<TWorkflowName>
       }
@@ -417,7 +426,6 @@ export type ClientOperations<TBot extends common.BaseBot> = {
   createEvent: CreateEvent<TBot>
   listEvents: ListEvents<TBot>
   createMessage: CreateMessage<TBot>
-  getOrCreateMessage: GetOrCreateMessage<TBot>
   getMessage: GetMessage<TBot>
   updateMessage: UpdateMessage<TBot>
   listMessages: ListMessages<TBot>
@@ -460,7 +468,7 @@ type ClientHooksBefore = {
 }
 
 type ClientHooksAfter = {
-  [K in client.Operation]?: (x: client.ClientOutputs[K]) => Promise<client.ClientOutputs[K]>
+  [K in client.Operation]?: (y: client.ClientOutputs[K], x: client.ClientInputs[K]) => Promise<client.ClientOutputs[K]>
 }
 
 export type ClientHooks = {

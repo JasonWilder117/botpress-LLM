@@ -2,6 +2,7 @@ import * as sdk from '@botpress/sdk'
 import * as consts from '../../consts'
 import { IntegrationTypingsModule } from '../../integration-implementation/integration-typings'
 import { Module, ReExportTypeModule } from '../../module'
+import * as strings from '../../strings'
 import { ActionsModule } from './actions-module'
 import { EventsModule } from './events-module'
 import { StatesModule } from './states-module'
@@ -15,8 +16,8 @@ class BotIntegrationsModule extends ReExportTypeModule {
     })
 
     for (const [alias, integration] of Object.entries(bot.integrations ?? {})) {
-      const integrationModule = new IntegrationTypingsModule(integration.definition)
-      integrationModule.unshift(alias)
+      const integrationModule = new IntegrationTypingsModule(integration.definition).setCustomTypeName(alias)
+      integrationModule.unshift(strings.dirName(alias))
       this.pushDep(integrationModule)
     }
   }
@@ -44,23 +45,23 @@ export class BotTypingsModule extends Module {
     integrationsModule.unshift('integrations')
     this.pushDep(integrationsModule)
 
-    const eventsModule = new EventsModule(bot.events ?? {})
+    const eventsModule = new EventsModule(bot.withPlugins.events ?? {})
     eventsModule.unshift('events')
     this.pushDep(eventsModule)
 
-    const statesModule = new StatesModule(bot.states ?? {})
+    const statesModule = new StatesModule(bot.withPlugins.states ?? {})
     statesModule.unshift('states')
     this.pushDep(statesModule)
 
-    const tablesModule = new TablesModule(bot.tables ?? {})
+    const tablesModule = new TablesModule(bot.withPlugins.tables ?? {})
     tablesModule.unshift('tables')
     this.pushDep(tablesModule)
 
-    const actionsModule = new ActionsModule(bot.actions ?? {})
+    const actionsModule = new ActionsModule(bot.withPlugins.actions ?? {})
     actionsModule.unshift('actions')
     this.pushDep(actionsModule)
 
-    const workflowsModule = new WorkflowsModule(bot.workflows ?? {})
+    const workflowsModule = new WorkflowsModule(bot.withPlugins.workflows ?? {})
     workflowsModule.unshift('workflows')
     this.pushDep(workflowsModule)
 

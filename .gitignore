@@ -15,3 +15,9 @@ __snapshots__
 .genenv/
 .genenv.*
 tilt_config.json
+/.idea
+hubspot.config.yml
+AGENTS.md
+CLAUDE.md
+lefthook.yml
+.claude

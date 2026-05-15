@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_ASSIGNED_TIMEOUT_MESSAGE, DEFAULT_USER_HITL_CANCELLED_MESSAGE } from '../../../plugin.definition'
+import * as configuration from '../../configuration'
 import * as conv from '../../conv-manager'
 import * as consts from '../consts'
 import * as bp from '.botpress'
@@ -9,31 +10,54 @@ export const handleEvent: bp.HookHandlers['before_incoming_event']['humanAgentAs
     payload: { downstreamConversationId },
   } = props.data
 
-  if (!_isTimeoutElapsed(props)) {
-    props.logger.info('Human agent assigned timeout event ignored because the timeout has not lapsed yet')
-    return consts.LET_BOT_HANDLE_EVENT
-  }
-
   if (!upstreamConversationId || !downstreamConversationId) {
     props.logger.error('Missing conversationId in event payload')
-    return consts.LET_BOT_HANDLE_EVENT
+    return consts.STOP_EVENT_HANDLING
   }
 
-  const upstreamCm = conv.ConversationManager.from(props, upstreamConversationId)
-  const downstreamCm = conv.ConversationManager.from(props, downstreamConversationId)
-  const isAgentAlreadyAssigned = await _isAgentAlreadyAssigned(upstreamCm, downstreamCm)
+  const upstreamConversation = await props.conversations.hitl.hitl.getById({ id: upstreamConversationId })
+  const upstreamCm = conv.ConversationManager.from(props, upstreamConversation)
 
-  if (isAgentAlreadyAssigned) {
+  if (upstreamCm.isHumanAgentAssigned()) {
     props.logger.info('Human agent assigned timeout event ignored because the agent is already assigned')
-    return consts.LET_BOT_HANDLE_EVENT
+    return consts.STOP_EVENT_HANDLING
   }
 
-  await _handleTimeout(props, upstreamCm, downstreamCm)
-  return consts.LET_BOT_HANDLE_EVENT
+  const downstreamConversation = await props.conversations.hitl.hitl.getById({ id: downstreamConversationId })
+  const downstreamCm = conv.ConversationManager.from(props, downstreamConversation)
+
+  const isHitlActive = (await upstreamCm.isHitlActive()) && (await downstreamCm.isHitlActive())
+
+  if (!isHitlActive) {
+    props.logger.info('Human agent assigned timeout event ignored because hitl is inactive')
+    return consts.STOP_EVENT_HANDLING
+  }
+
+  const sessionConfig = await configuration.retrieveSessionConfig({
+    ...props,
+    upstreamConversationId,
+  })
+
+  if (!_isTimeoutElapsed(props, sessionConfig)) {
+    props.logger.info('Human agent assigned timeout event ignored because the timeout has not lapsed yet')
+    return consts.STOP_EVENT_HANDLING
+  }
+
+  await _handleTimeout(props, upstreamCm, downstreamCm, sessionConfig)
+
+  if (sessionConfig.flowOnHitlStopped) {
+    // the bot will continue the conversation without the patient having to send another message
+    await upstreamCm.continueWorkflow()
+  }
+
+  return consts.STOP_EVENT_HANDLING
 }
 
-const _isTimeoutElapsed = (props: bp.HookHandlerProps['before_incoming_event']): boolean => {
-  if (!_isTimeoutEnabled(props)) {
+const _isTimeoutElapsed = (
+  props: bp.HookHandlerProps['before_incoming_event'],
+  sessionConfig: bp.configuration.Configuration
+): boolean => {
+  if (!_isTimeoutEnabled(sessionConfig)) {
     props.logger.info('Human agent assigned timeout is not enabled')
     return false
   }
@@ -41,48 +65,25 @@ const _isTimeoutElapsed = (props: bp.HookHandlerProps['before_incoming_event']):
   const now = Date.now()
   const timeWhenCreated = new Date(props.data.payload.sessionStartedAt).getTime()
   const elapsedSeconds = (now - timeWhenCreated) / 1000
-  const timeoutSeconds = props.configuration.agentAssignedTimeoutSeconds ?? 0
+  const timeoutSeconds = sessionConfig.agentAssignedTimeoutSeconds ?? 0
 
   return elapsedSeconds >= timeoutSeconds
 }
 
-const _isTimeoutEnabled = (props: bp.HookHandlerProps['before_incoming_event']): boolean =>
-  !!props.configuration.agentAssignedTimeoutSeconds
-
-const _isAgentAlreadyAssigned = async (
-  upstreamCm: conv.ConversationManager,
-  downstreamCm: conv.ConversationManager
-): Promise<boolean> => {
-  const isHumanAgentAssigned = await upstreamCm.isHumanAgentAssigned()
-
-  if (isHumanAgentAssigned) {
-    return true
-  }
-
-  const isHitlActive = (await upstreamCm.isHitlActive()) && (await downstreamCm.isHitlActive())
-
-  if (!isHitlActive) {
-    // If the HITL session is not active, we don't need to check whether the
-    // human agent is assigned and we should not process the event.
-    return true
-  }
-
-  return false
-}
+const _isTimeoutEnabled = (sessionConfig: bp.configuration.Configuration): boolean =>
+  !!sessionConfig.agentAssignedTimeoutSeconds
 
 const _handleTimeout = async (
   props: bp.HookHandlerProps['before_incoming_event'],
   upstreamCm: conv.ConversationManager,
-  downstreamCm: conv.ConversationManager
+  downstreamCm: conv.ConversationManager,
+  sessionConfig: bp.configuration.Configuration
 ) => {
+  await downstreamCm.maybeRespondText(sessionConfig.onUserHitlCancelledMessage, DEFAULT_USER_HITL_CANCELLED_MESSAGE)
+
   await Promise.allSettled([
-    upstreamCm.respond({
-      text: props.configuration.onAgentAssignedTimeoutMessage ?? DEFAULT_AGENT_ASSIGNED_TIMEOUT_MESSAGE,
-    }),
-    downstreamCm.respond({
-      // TODO: We might want to add a custom message for the human agent.
-      text: props.configuration.onUserHitlCancelledMessage ?? DEFAULT_USER_HITL_CANCELLED_MESSAGE,
-    }),
+    upstreamCm.setHitlInactive(conv.HITL_END_REASON.AGENT_ASSIGNMENT_TIMEOUT),
+    downstreamCm.setHitlInactive(conv.HITL_END_REASON.AGENT_ASSIGNMENT_TIMEOUT),
   ])
 
   props.logger.withConversationId(upstreamCm.conversationId).info('HITL session ended due to agent assignment timeout')
@@ -90,13 +91,8 @@ const _handleTimeout = async (
     .withConversationId(downstreamCm.conversationId)
     .info('HITL session ended due to agent assignment timeout')
 
-  try {
-    // Call stopHitl in the hitl integration (zendesk, etc.):
-    await props.actions.hitl.stopHitl({ conversationId: downstreamCm.conversationId })
-  } finally {
-    await Promise.all([
-      upstreamCm.setHitlInactive(conv.HITL_END_REASON.AGENT_ASSIGNMENT_TIMEOUT),
-      downstreamCm.setHitlInactive(conv.HITL_END_REASON.AGENT_ASSIGNMENT_TIMEOUT),
-    ])
-  }
+  // Call stopHitl in the hitl integration (zendesk, etc.):
+  await props.actions.hitl.stopHitl({ conversationId: downstreamCm.conversationId })
+
+  await upstreamCm.maybeRespondText(sessionConfig.onAgentAssignedTimeoutMessage, DEFAULT_AGENT_ASSIGNED_TIMEOUT_MESSAGE)
 }

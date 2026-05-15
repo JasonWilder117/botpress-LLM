@@ -1,5 +1,5 @@
 export * as messages from './message'
-export * from './const'
+export * from './public-consts'
 export * from './serve'
 export * from './zui'
 
@@ -44,7 +44,10 @@ export {
   BotImplementation as Bot,
   BotImplementationProps as BotProps,
   BotSpecificClient,
+  // NOTE: BotHandlers is needed by the Studio, and InjectedBotHandlers is
+  //       needed for the code generation in the CLI
   BotHandlers,
+  InjectedBotHandlers,
   TagDefinition as BotTagDefinition,
   StateType as BotStateType,
   StateDefinition as BotStateDefinition,
@@ -75,7 +78,12 @@ export {
   PluginImplementationProps as PluginProps,
   PluginRuntimeProps,
   PluginHandlers,
+  InjectedPluginHandlers,
 } from './plugin'
+
+export * as version from './version-utils'
+
+export * as errors from './errors'
 
 export {
   //

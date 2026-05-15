@@ -7,7 +7,10 @@ const confirm = true
 const json = false
 const allowDeprecated = false
 const isPublic = false
+const visibility = 'private' as const
 const minify = true
+const profile = undefined
+const url = undefined
 
 export default {
   minify,
@@ -20,4 +23,7 @@ export default {
   json,
   allowDeprecated,
   public: isPublic,
-}
+  visibility,
+  profile,
+  url,
+} as const

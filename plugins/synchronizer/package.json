@@ -2,7 +2,8 @@
   "name": "@botpresshub/synchronizer",
   "scripts": {
     "check:type": "tsc --noEmit",
-    "build": "bp add -y && bp build"
+    "build": "bp add -y && bp build",
+    "test": "vitest --run"
   },
   "private": true,
   "dependencies": {
@@ -13,11 +14,14 @@
   "devDependencies": {
     "@botpress/cli": "workspace:*",
     "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
     "@botpresshub/creatable": "workspace:*",
     "@botpresshub/deletable": "workspace:*",
     "@botpresshub/listable": "workspace:*",
     "@botpresshub/updatable": "workspace:*",
-    "@types/lodash": "^4.14.191"
+    "@types/lodash": "^4.14.191",
+    "@types/semver": "^7.3.11",
+    "semver": "^7.3.8"
   },
   "bpDependencies": {
     "listable": "../../interfaces/listable",

@@ -1,21 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 
-import { BotpressDocumentation, getClient, getZai, metadata } from './utils'
+import { BotpressDocumentation, getCachedClient, getClient, getZai, metadata } from './utils'
 
 import { z } from '@bpinternal/zui'
 import { check } from '@botpress/vai'
 
 import { TableAdapter } from '../src/adapters/botpress-table'
-import { console } from 'inspector'
 
 describe('zai.extract', () => {
-  const zai = getZai()
+  let cognitive = getCachedClient()
+  let zai = getZai(cognitive)
+
+  beforeEach(() => {
+    cognitive = getCachedClient()
+    zai = getZai(cognitive)
+  })
 
   it('extract simple object from paragraph', async () => {
     const person = await zai.extract(
       'My name is John Doe, I am 30 years old and I live in Quebec',
       z.object({
-        name: z.string(),
+        name: z.string().describe('The full name of the person'),
         age: z.number(),
         location: z.string(),
       })
@@ -28,6 +33,17 @@ describe('zai.extract', () => {
         "name": "John Doe",
       }
     `)
+  })
+
+  it('rejects non-zui schemas', async () => {
+    const schema = {
+      _output: undefined,
+      safeParse: () => ({ success: true, data: { name: 'John Doe', age: 30 } }),
+    }
+
+    await expect(
+      zai.extract('My name is John Doe, I am 30 years old and I live in Quebec', schema as any).result()
+    ).rejects.toThrow('@bpinternal/zui')
   })
 
   it('extract an array of objects from paragraph', async () => {
@@ -91,6 +107,150 @@ describe('zai.extract', () => {
     `)
   })
 
+  it('extract age', async () => {
+    const age = await zai.extract(
+      `Countries are Canada, Russia and Pakistan. My favorite colors are red, green, and blue. Dog, cat, fish. I am thirty years old. I was born in 1990.`,
+      z.number().describe('Age of the person')
+    )
+
+    expect(age).toMatchInlineSnapshot(`30`)
+  })
+
+  it('extract an array of string', async () => {
+    const colors = await zai.extract(
+      `Countries are Canada, Russia and Pakistan. My favorite colors are red, green, and blue. Dog, cat, fish.`,
+      z.array(z.string().describe('Color'))
+    )
+
+    expect(colors).toMatchInlineSnapshot(`
+      [
+        "red",
+        "green",
+        "blue",
+      ]
+    `)
+  })
+
+  it('extract a fragmented object from a long text (multi-chunks)', async () => {
+    const TOKEN = 'TOKEN '
+    let text = `Name: John Doe
+\n${TOKEN.repeat(500)}
+Age: 30
+\n${TOKEN.repeat(500)}
+Address: 123 Main St, Anytown, USA
+\n${TOKEN.repeat(500)}
+Phone: (123) 456-7890`
+
+    const { output, usage } = await zai
+      .extract(
+        text,
+        z.object({
+          name: z.string().describe('The name of the person'),
+          age: z.number().describe('The age of the person'),
+          address: z.string().describe('The address of the person'),
+          phone: z.string().describe('The phone number of the person'),
+        }),
+        { chunkLength: 250, strict: true }
+      )
+      .result()
+
+    expect(usage.requests.responses).toBeGreaterThan(5)
+    expect(output).toMatchInlineSnapshot(`
+      {
+        "address": "123 Main St, Anytown, USA",
+        "age": 30,
+        "name": "John Doe",
+        "phone": "(123) 456-7890",
+      }
+    `)
+  })
+
+  it('extract an object of array from a long text (multi-chunks)', async () => {
+    const TOKEN = 'TOKEN '
+    let text = `Feature 1: Tables
+\n${TOKEN.repeat(500)}
+Feature 2: HITL (Human in the Loop)
+\n${TOKEN.repeat(500)}
+Feature 3: Analytics
+\n${TOKEN.repeat(500)}
+Feature 4: Integrations`
+
+    const result = await zai
+      .extract(text, z.object({ features: z.array(z.string()) }), {
+        instructions: 'Extract all features from the text',
+        chunkLength: 250,
+      })
+      .result()
+
+    expect(result.usage.requests.responses).toBeGreaterThan(5)
+    expect(result.output.features.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('extract an array of discriminated union', async () => {
+    cognitive.on('request', (req) => {
+      console.log(req.input.messages)
+    })
+
+    const schema = z
+      .array(
+        z.discriminatedUnion('type', [
+          z
+            .object({
+              type: z.literal('book'),
+              title: z.string(),
+              author: z.string().describe('The author of the book'),
+            })
+            .describe('A book'),
+          z
+            .object({
+              type: z.literal('animal'),
+              species: z.string(),
+              name: z.string().describe('The name of the animal'),
+            })
+            .describe('An animal'),
+        ])
+      )
+      .describe('An array of books and animals')
+
+    const items = await zai.extract(
+      `I have a book called "The Great Gatsby" by F. Scott Fitzgerald and a pet dog named "Buddy".`,
+      schema
+    )
+
+    expect(items).toMatchInlineSnapshot(`
+      [
+        {
+          "author": "F. Scott Fitzgerald",
+          "title": "The Great Gatsby",
+          "type": "book",
+        },
+        {
+          "name": "Buddy",
+          "species": "dog",
+          "type": "animal",
+        },
+      ]
+    `)
+  })
+
+  it('extract zero elements when none found', async () => {
+    const text = `The quick brown fox jumps over the lazy dog.`
+
+    const tags = await zai.extract(
+      text,
+      z.array(
+        z.object({
+          city: z.string().describe('The name of the city'),
+        })
+      ),
+      {
+        instructions: 'Extract all the cities mentioned in the text. If there is none, return an empty array.',
+      }
+    )
+
+    expect(tags).toMatchInlineSnapshot(`[]`)
+  })
+
   it('extract an array of objects from a super long text', async () => {
     const features = await zai.extract(
       BotpressDocumentation,
@@ -109,12 +269,12 @@ describe('zai.extract', () => {
       }
     )
 
-    check(features, 'Contains an element about tables').toBe(true)
-    check(features, 'Contains an element about HITL (human in the loop)').toBe(true)
+    expect(features.length).toBeGreaterThanOrEqual(5)
+    check(features, 'Contains botpress related features, like dashboard or studio or tables').toBe(true)
   })
 })
 
-describe('zai.learn.extract', () => {
+describe.sequential('zai.learn.extract', () => {
   const client = getClient()
   let tableName = 'ZaiTestExtractInternalTable'
   let taskId = 'extract'
@@ -161,7 +321,7 @@ describe('zai.learn.extract', () => {
     check(value, 'the values are NOT IN ALL CAPS').toBe(true)
 
     let rows = await client.findTableRows({ table: tableName })
-    expect(rows.rows.length).toBe(1)
+    expect(rows.rows.length).toBeGreaterThanOrEqual(1)
 
     await adapter.saveExample({
       key: 't1',

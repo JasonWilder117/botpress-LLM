@@ -15,7 +15,9 @@ import {
   ChatCompletionToolMessageParam,
   ChatCompletionUserMessageParam,
 } from 'openai/resources'
+import { ChatCompletionReasoningEffort } from 'openai/resources/chat/completions'
 import { createUpstreamProviderFailedError } from './errors'
+import { ReasoningEffort } from './schemas'
 import { GenerateContentInput, GenerateContentOutput, ToolCall, Message, ModelDetails } from './types'
 
 const OpenAIErrorSchema = z
@@ -33,9 +35,10 @@ const OpenAIErrorSchema = z
   })
   .strip() // IMPORTANT: This is so we can safely log the OpenAI error log as-is, to avoid leaking other sensitive information the error response may include.
 
+export type OpenAIClient = OpenAI
 export async function generateContent<M extends string>(
   input: GenerateContentInput,
-  openAIClient: OpenAI,
+  openAIClient: OpenAIClient,
   logger: IntegrationLogger,
   props: {
     provider: string
@@ -80,11 +83,26 @@ export async function generateContent<M extends string>(
     })
   }
 
+  let maxTokens: number | undefined = undefined
+
+  if (input.maxTokens) {
+    if (input.maxTokens <= model.output.maxTokens) {
+      maxTokens = input.maxTokens
+    } else {
+      maxTokens = model.output.maxTokens
+      logger
+        .forBot()
+        .warn(
+          `Received maxTokens parameter greater than the maximum output tokens allowed for model "${modelId}", capping maxTokens to ${maxTokens}`
+        )
+    }
+  }
+
   let response: OpenAI.Chat.Completions.ChatCompletion | undefined
 
   let request: ChatCompletionCreateParamsNonStreaming = {
     model: modelId,
-    max_tokens: input.maxTokens || undefined, // note: ignore a zero value as the Studio doesn't support empty number inputs and is defaulting this to 0
+    max_tokens: maxTokens,
     temperature: input.temperature,
     top_p: input.topP,
     response_format: input.responseFormat === 'json_object' ? { type: 'json_object' } : undefined,
@@ -147,7 +165,7 @@ export async function generateContent<M extends string>(
     choices: response.choices.map((choice) => ({
       role: choice.message.role,
       type: 'text', // note: OpenAI only returns text messages (TODO: investigate response format for image generation)
-      content: choice.message.content,
+      content: choice.message.content ?? null, // Some OpenAI-compatible providers (e.g. Cerebras) might not return a `content` at all (e.g. when doing a tool call) so we always fallback to null if it's not present.
       index: choice.index,
       stopReason: mapToStopReason(choice.finish_reason),
       toolCalls: mapToToolCalls(choice.message.tool_calls, logger, props.provider),
@@ -390,4 +408,57 @@ function mapToToolCalls(
 
     return toolCalls
   }, [] as ToolCall[])
+}
+
+export function validateGptOssReasoningEffort(
+  input: { reasoningEffort?: ReasoningEffort; model?: { id: string } },
+  logger: IntegrationLogger
+): ChatCompletionReasoningEffort | undefined {
+  if (input.reasoningEffort === undefined) {
+    return undefined
+  }
+
+  const GptOssSupportedReasoningEfforts: ChatCompletionReasoningEffort[] = ['low', 'medium', 'high']
+
+  if (input.reasoningEffort === 'none') {
+    const acceptedValues = GptOssSupportedReasoningEfforts.map((x) => `"${x}"`)
+      .map((x, i) => (i === GptOssSupportedReasoningEfforts.length - 1 ? `or ${x}` : x))
+      .join(', ')
+    throw new InvalidPayloadError(
+      `Using "none" to disabling reasoning is not supported by ${input.model ? `the "${input.model?.id}" model` : 'this model'}, please use ${acceptedValues} instead or switch to a non-reasoning model`
+    )
+  }
+
+  if (GptOssSupportedReasoningEfforts.includes(input.reasoningEffort as any)) {
+    return input.reasoningEffort as ChatCompletionReasoningEffort
+  } else {
+    const reasoningEffortOverride: ChatCompletionReasoningEffort = 'medium'
+    logger
+      .forBot()
+      .info(
+        `Reasoning effort "${input.reasoningEffort}" is not supported by ${input.model ? `the "${input.model?.id}" model` : 'this model'}, using "${reasoningEffortOverride}" effort instead`
+      )
+    return reasoningEffortOverride
+  }
+}
+
+export function validateOpenAIReasoningEffort(
+  input: { reasoningEffort?: ReasoningEffort; model?: { id: string } },
+  logger: IntegrationLogger
+): ChatCompletionReasoningEffort | undefined {
+  if (input.reasoningEffort === 'none') {
+    if (input.model?.id.startsWith('gpt-5.2-') || input.model?.id.startsWith('gpt-5.1-')) {
+      return 'none'
+    } else {
+      logger
+        .forBot()
+        .warn(
+          `Using "none" to disabling reasoning is not supported by the ${input.model?.id} model, falling back to "minimal" reasoning effort instead`
+        )
+      return 'minimal'
+    }
+  }
+
+  // Reasoning efforts supported by commercial OpenAI models are the same as the GPT-OSS models at the moment, so we reuse the same validation logic.
+  return validateGptOssReasoningEffort(input, logger)
 }

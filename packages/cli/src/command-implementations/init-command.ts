@@ -2,7 +2,7 @@ import type * as client from '@botpress/client'
 import chalk from 'chalk'
 import * as fs from 'fs'
 import * as pathlib from 'path'
-import { ApiClient } from 'src/api'
+import { ApiClient } from '../api'
 import type commandDefinitions from '../command-definitions'
 import * as errors from '../errors'
 import { Logger } from '../logger'
@@ -21,21 +21,29 @@ export class InitCommand extends GlobalCommand<InitCommandDefinition> {
     const projectType = await this._promptProjectType()
     const workDir = utils.path.absoluteFrom(utils.path.cwd(), this.argv.workDir)
 
-    if (projectType === 'bot') {
-      await this._initBot({ workDir })
-      return
-    }
+    try {
+      if (projectType === 'bot') {
+        await this._initBot({ workDir })
+        return
+      }
 
-    if (projectType === 'integration') {
-      const workspaceHandle = await this._promptWorkspaceHandle()
-      await this._initIntegration({ workDir, workspaceHandle })
-      return
-    }
+      if (projectType === 'integration') {
+        const workspaceHandle = await this._promptWorkspaceHandle()
+        await this._initIntegration({ workDir, workspaceHandle })
+        return
+      }
 
-    if (projectType === 'plugin') {
-      const workspaceHandle = await this._promptWorkspaceHandle()
-      await this._initPlugin({ workDir, workspaceHandle })
-      return
+      if (projectType === 'plugin') {
+        const workspaceHandle = await this._promptWorkspaceHandle()
+        await this._initPlugin({ workDir, workspaceHandle })
+        return
+      }
+    } catch (error) {
+      if (error instanceof errors.AbortedOperationError) {
+        this.logger.log(error.message)
+        return
+      }
+      throw error
     }
 
     type _assertion = utils.types.AssertNever<typeof projectType>
@@ -182,33 +190,35 @@ export class InitCommand extends GlobalCommand<InitCommandDefinition> {
     const dirName = utils.casing.to.kebabCase(name)
     const destination = pathlib.join(destDir, dirName)
 
-    const exist = await this._checkIfDestinationExists(destination)
-    if (exist) {
-      return
+    const destinationCanBeUsed = await this._checkIfDestinationCanBeUsed(destination)
+    if (!destinationCanBeUsed) {
+      throw new errors.AbortedOperationError()
     }
+    await fs.promises.rm(destination, { recursive: true, force: true })
 
     await fs.promises.cp(srcDir, destination, { recursive: true })
 
-    const pkgJsonPath = pathlib.join(destination, 'package.json')
-    const strContent = await fs.promises.readFile(pkgJsonPath, 'utf-8')
-    const json = JSON.parse(strContent)
+    const json = await utils.pkgJson.readPackageJson(destination).catch((thrown) => {
+      throw errors.BotpressCLIError.wrap(thrown, 'Failed to read package.json file')
+    })
 
     const pkgJsonName = utils.casing.to.snakeCase(name)
     const updatedJson = { name: pkgJsonName, ...json, ...pkgJson }
-    await fs.promises.writeFile(pkgJsonPath, JSON.stringify(updatedJson, null, 2))
+    await utils.pkgJson.writePackageJson(destination, updatedJson).catch((thrown) => {
+      throw errors.BotpressCLIError.wrap(thrown, 'Failed to write package.json file')
+    })
   }
 
-  private _checkIfDestinationExists = async (destination: string) => {
+  private _checkIfDestinationCanBeUsed = async (destination: string) => {
     if (fs.existsSync(destination)) {
       const override = await this.prompt.confirm(
         `Directory ${chalk.bold(destination)} already exists. Do you want to overwrite it?`
       )
       if (!override) {
-        this.logger.log('Aborting')
-        return true
+        return false
       }
     }
-    return false
+    return true
   }
 }
 
@@ -245,7 +255,7 @@ class WorkspaceResolver {
     }
 
     const workspace = await this._promptUserToSelectWorkspace()
-    return workspace.handle ?? (await this._assignHandleToWorkspace(workspace))
+    return workspace.handle || (await this._assignHandleToWorkspace(workspace))
   }
 
   private async _fetchWorkspaces(): Promise<void> {

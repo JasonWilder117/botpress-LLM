@@ -1,6 +1,4 @@
-import type yargs from '@bpinternal/yargs-extra'
-
-import type { YargsConfig, YargsSchema } from '@bpinternal/yargs-extra'
+import type { default as yargs, YargsConfig, YargsSchema } from '@bpinternal/yargs-extra'
 
 export type CommandPositionalOption = yargs.PositionalOptions & { positional: true; idx: number }
 export type CommandNamedOption = YargsSchema[string] & { positional?: false }
@@ -17,7 +15,7 @@ export type CommandArgv<C extends CommandDefinition = CommandDefinition> = Yargs
 export type CommandDefinition<S extends CommandSchema = CommandSchema> = {
   schema: S
   description?: string
-  alias?: string
+  alias?: string | string[]
 }
 
 export type CommandImplementation<C extends CommandDefinition = CommandDefinition> = (

@@ -1,10 +1,9 @@
-/* bplint-disable */
 import * as common from '@botpress/common'
 import { z, InterfaceDefinition } from '@botpress/sdk'
 
 export default new InterfaceDefinition({
-  name: 'textToImage',
-  version: '2.1.0',
+  name: 'text-to-image',
+  version: '2.1.2',
   entities: {
     imageModelRef: {
       schema: common.textToImage.schemas.ImageModelRefSchema,
@@ -36,5 +35,8 @@ export default new InterfaceDefinition({
           }),
       },
     },
+  },
+  __advanced: {
+    useLegacyZuiTransformer: true,
   },
 })

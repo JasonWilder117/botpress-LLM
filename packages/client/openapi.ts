@@ -1,5 +1,14 @@
-import { api as publicOpenapi } from '@botpress/api'
+import { runtimeApi, adminApi, filesApi, tablesApi, api as publicApi, billingApi } from '@botpress/api'
 
-void publicOpenapi.exportClient('./src/gen', {
+const options = {
   generator: 'opapi',
-})
+  ignoreDefaultParameters: true,
+  ignoreSecurity: true,
+} as const
+
+void publicApi.exportClient('./src/gen/public', { generator: 'opapi' })
+void runtimeApi.exportClient('./src/gen/runtime', options)
+void adminApi.exportClient('./src/gen/admin', options)
+void filesApi.exportClient('./src/gen/files', options)
+void tablesApi.exportClient('./src/gen/tables', options)
+void billingApi.exportClient('./src/gen/billing', options)

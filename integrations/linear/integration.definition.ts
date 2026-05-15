@@ -1,13 +1,19 @@
-/* bplint-disable */
+import { posthogHelper } from '@botpress/common'
 import { IntegrationDefinition } from '@botpress/sdk'
-import { sentry as sentryHelpers } from '@botpress/sdk-addons'
+import * as sdk from '@botpress/sdk'
+import proactiveConversation from 'bp_modules/proactive-conversation'
 import deletable from './bp_modules/deletable'
+import filesReadonly from './bp_modules/files-readonly'
 import listable from './bp_modules/listable'
+
 import { actions, channels, events, configuration, configurations, user, states, entities } from './definitions'
 
+export const INTEGRATION_NAME = 'linear'
+export const INTEGRATION_VERSION = '2.5.0'
+
 export default new IntegrationDefinition({
-  name: 'linear',
-  version: '1.1.0',
+  name: INTEGRATION_NAME,
+  version: INTEGRATION_VERSION,
   title: 'Linear',
   description:
     'Manage your projects autonomously. Have your bot participate in discussions, manage issues and teams, and track progress.',
@@ -31,10 +37,20 @@ export default new IntegrationDefinition({
     CLIENT_SECRET: {
       description: 'The client secret of your Linear OAuth app.',
     },
+    DESK_CLIENT_ID: {
+      description: 'The client ID of your Linear OAuth app.',
+    },
+    DESK_CLIENT_SECRET: {
+      description: 'The client secret of your Linear OAuth app.',
+    },
     WEBHOOK_SIGNING_SECRET: {
       description: 'The signing secret of your Linear webhook.',
     },
-    ...sentryHelpers.COMMON_SECRET_NAMES,
+    ...posthogHelper.COMMON_SECRET_NAMES,
+  },
+  attributes: {
+    category: 'Project Management',
+    repo: 'botpress',
   },
 })
   .extend(listable, ({ entities }) => ({
@@ -50,5 +66,24 @@ export default new IntegrationDefinition({
     },
     events: {
       deleted: { name: 'issueDeleted' },
+    },
+  }))
+  .extend(proactiveConversation, ({ entities }) => ({
+    entities: {
+      conversation: entities.issueConversation,
+    },
+    actions: { getOrCreateConversation: { name: 'getOrCreateIssueConversation' } },
+  }))
+  .extend(filesReadonly, ({}) => ({
+    entities: {},
+    actions: {
+      listItemsInFolder: {
+        name: 'filesReadonlyListItemsInFolder',
+        attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
+      },
+      transferFileToBotpress: {
+        name: 'filesReadonlyTransferFileToBotpress',
+        attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
+      },
     },
   }))

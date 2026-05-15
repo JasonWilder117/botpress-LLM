@@ -1,27 +1,50 @@
 import * as crypto from 'crypto'
 import { Dropbox } from 'dropbox'
-import { File as FileEntity, Folder as FolderEntity } from '../../definitions'
+import { File as FileEntity, Folder as FolderEntity, Deleted as DeletedEntity } from '../../definitions'
 import { handleErrorsDecorator as handleErrors } from './error-handling'
 import { ActionInput, RequestMapping, ResponseMapping } from './mapping'
+import { DropboxOAuthClient, getAuthorizationCode, getOAuthClientId, getOAuthClientSecret } from './oauth-client'
 import * as bp from '.botpress'
 
 type File = FileEntity.InferredType
 type Folder = FolderEntity.InferredType
+type Deleted = DeletedEntity.InferredType
+type Item = File | Folder | Deleted
 
 export class DropboxClient {
   private static readonly _maxResultsPerPage = 100
   private readonly _dropboxRestClient: Dropbox
+  private readonly _accountId: string
 
-  private constructor(credentials: { accessToken: string; clientId: string; clientSecret: string }) {
+  private constructor(credentials: { accessToken: string; clientId: string; clientSecret: string; accountId: string }) {
     this._dropboxRestClient = new Dropbox(credentials)
+    this._accountId = credentials.accountId
   }
 
-  public static async create({ ctx }: { client: bp.Client; ctx: bp.Context }) {
+  public static async create({ ctx, client }: { client: bp.Client; ctx: bp.Context }) {
+    const oauthClient = new DropboxOAuthClient({ ctx, client })
+    const { accessToken, accountId } = await oauthClient.getNewAccessToken()
+
     return new DropboxClient({
-      accessToken: ctx.configuration.accessToken,
-      clientId: ctx.configuration.clientId,
-      clientSecret: ctx.configuration.clientSecret,
+      accessToken,
+      clientId: getOAuthClientId({ ctx }),
+      clientSecret: getOAuthClientSecret({ ctx }),
+      accountId,
     })
+  }
+
+  public getAccountId(): string {
+    return this._accountId
+  }
+
+  public static async processAuthorizationCode(props: { client: bp.Client; ctx: bp.Context }): Promise<void> {
+    const authorizationCode = getAuthorizationCode({ ctx: props.ctx })
+    if (!authorizationCode) {
+      throw new Error('Authorization code is required')
+    }
+    const oauthClient = new DropboxOAuthClient(props)
+    // For manual configuration (no redirect_uri used), pass empty string
+    await oauthClient.processAuthorizationCode(authorizationCode, '')
   }
 
   @handleErrors('Failed to validate Dropbox authentication')
@@ -59,7 +82,7 @@ export class DropboxClient {
     path: string
     recursive: boolean
     nextToken?: string
-  }): Promise<{ items: (File | Folder)[]; nextToken?: string }> {
+  }): Promise<{ items: Item[]; nextToken: string; hasMore: boolean }> {
     const { result } = nextToken
       ? await this._dropboxRestClient.filesListFolderContinue({
           cursor: nextToken,
@@ -73,7 +96,8 @@ export class DropboxClient {
 
     return {
       items: result.entries.map(ResponseMapping.mapItem),
-      nextToken: result.has_more ? result.cursor : undefined,
+      nextToken: result.cursor,
+      hasMore: result.has_more,
     }
   }
 
@@ -116,14 +140,14 @@ export class DropboxClient {
   }
 
   @handleErrors('Failed to copy item')
-  public async copyItemToNewPath({ fromPath, toPath }: { fromPath: string; toPath: string }): Promise<File | Folder> {
+  public async copyItemToNewPath({ fromPath, toPath }: { fromPath: string; toPath: string }): Promise<Item> {
     const { result } = await this._dropboxRestClient.filesCopyV2({ from_path: fromPath, to_path: toPath })
 
     return ResponseMapping.mapItem(result.metadata)
   }
 
   @handleErrors('Failed to move item')
-  public async moveItemToNewPath({ fromPath, toPath }: { fromPath: string; toPath: string }): Promise<File | Folder> {
+  public async moveItemToNewPath({ fromPath, toPath }: { fromPath: string; toPath: string }): Promise<Item> {
     const { result } = await this._dropboxRestClient.filesMoveV2({ from_path: fromPath, to_path: toPath })
 
     return ResponseMapping.mapItem(result.metadata)

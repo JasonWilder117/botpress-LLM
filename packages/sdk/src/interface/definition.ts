@@ -1,19 +1,22 @@
+import { SchemaTransformOptions } from '../common/types'
 import { ActionDefinition, ChannelDefinition, EntityDefinition, EventDefinition } from '../integration/definition'
 import * as utils from '../utils'
-import z, { ZuiObjectSchema, GenericZuiSchema, ZodRef } from '../zui'
+import { SDK_VERSION } from '../version'
+import { z } from '../zui'
 
-type BaseEvents = Record<string, ZuiObjectSchema>
-type BaseActions = Record<string, ZuiObjectSchema>
-type BaseMessages = Record<string, ZuiObjectSchema>
+type BaseEvents = Record<string, z.ZuiObjectSchema>
+type BaseActions = Record<string, z.ZuiObjectSchema>
+type BaseMessages = Record<string, z.ZuiObjectSchema>
 type BaseChannels = Record<string, BaseMessages>
-type BaseEntities = Record<string, ZuiObjectSchema>
+type BaseEntities = Record<string, z.ZuiObjectSchema>
 
 type EntityReferences<TEntities extends BaseEntities> = {
-  [K in keyof TEntities]: ZodRef
+  [K in keyof TEntities]: z.ZodRef
 }
 
 type GenericEventDefinition<TEntities extends BaseEntities, TEvent extends BaseEvents[string] = BaseEvents[string]> = {
-  schema: GenericZuiSchema<EntityReferences<TEntities>, TEvent>
+  schema: z.GenericZuiSchema<EntityReferences<TEntities>, TEvent>
+  attributes?: Record<string, string>
 }
 
 type GenericChannelDefinition<
@@ -22,7 +25,7 @@ type GenericChannelDefinition<
 > = {
   messages: {
     [K in keyof TChannel]: {
-      schema: GenericZuiSchema<EntityReferences<TEntities>, TChannel[K]>
+      schema: z.GenericZuiSchema<EntityReferences<TEntities>, TChannel[K]>
     }
   }
 }
@@ -35,8 +38,9 @@ type GenericActionDefinition<
   description?: string
   billable?: boolean
   cacheable?: boolean
-  input: { schema: GenericZuiSchema<EntityReferences<TEntities>, TAction> }
-  output: { schema: GenericZuiSchema<EntityReferences<TEntities>, ZuiObjectSchema> }
+  input: { schema: z.GenericZuiSchema<EntityReferences<TEntities>, TAction> }
+  output: { schema: z.GenericZuiSchema<EntityReferences<TEntities>, z.ZuiObjectSchema> }
+  attributes?: Record<string, string>
 }
 
 export type InterfaceDefinitionProps<
@@ -49,6 +53,13 @@ export type InterfaceDefinitionProps<
 > = {
   name: TName
   version: TVersion
+
+  title?: string
+  description?: string
+  icon?: string
+  readme?: string
+
+  attributes?: Record<string, string>
 
   entities?: {
     [K in keyof TEntities]: EntityDefinition<TEntities[K]>
@@ -63,6 +74,8 @@ export type InterfaceDefinitionProps<
   channels?: {
     [K in keyof TChannels]: GenericChannelDefinition<TEntities, TChannels[K]>
   }
+
+  __advanced?: SchemaTransformOptions
 }
 
 export class InterfaceDefinition<
@@ -76,17 +89,31 @@ export class InterfaceDefinition<
   public readonly name: this['props']['name']
   public readonly version: this['props']['version']
 
+  public readonly title: this['props']['title']
+  public readonly description: this['props']['description']
+  public readonly icon: this['props']['icon']
+  public readonly readme: this['props']['readme']
+  public readonly attributes: this['props']['attributes']
+
   public readonly entities: { [K in keyof TEntities]: EntityDefinition<TEntities[K]> }
   public readonly events: { [K in keyof TEvents]: EventDefinition<TEvents[K]> }
   public readonly actions: { [K in keyof TActions]: ActionDefinition<TActions[K]> }
   public readonly channels: { [K in keyof TChannels]: ChannelDefinition<TChannels[K]> }
+
+  public readonly __advanced: this['props']['__advanced']
 
   public constructor(
     public readonly props: InterfaceDefinitionProps<TName, TVersion, TEntities, TActions, TEvents, TChannels>
   ) {
     this.name = props.name
     this.version = props.version
+    this.icon = props.icon
+    this.title = props.title
+    this.description = props.description
+    this.readme = props.readme
     this.entities = props.entities ?? ({} as this['entities'])
+    this.attributes = props.attributes
+    this.__advanced = props.__advanced
 
     const entityReferences = this._getEntityReference(this.entities)
 
@@ -138,8 +165,12 @@ export class InterfaceDefinition<
     this.channels = channels as this['channels']
   }
 
+  public get metadata() {
+    return { sdkVersion: SDK_VERSION } as const
+  }
+
   private _getEntityReference = (entities: Record<string, EntityDefinition>): EntityReferences<TEntities> => {
-    const entityReferences: Record<string, ZodRef> = {} as EntityReferences<TEntities>
+    const entityReferences: Record<string, z.ZodRef> = {} as EntityReferences<TEntities>
     for (const [entityName, entityDef] of Object.entries(entities)) {
       const title = entityDef.schema._def['x-zui']?.title
       const description = entityDef.schema._def.description

@@ -2,10 +2,32 @@
 import { z } from '@bpinternal/zui'
 
 import { chunk } from 'lodash-es'
+import pLimit from 'p-limit'
+import { ZaiContext } from '../context'
+import { Response } from '../response'
+
+import { getTokenizer } from '../tokenizer'
 import { Zai } from '../zai'
 import { PROMPT_INPUT_BUFFER, PROMPT_OUTPUT_BUFFER } from './constants'
 
-export type Options = z.input<typeof Options>
+export type Options = {
+  /** What should the text be summarized to? */
+  prompt?: string
+  /** How to format the example text */
+  format?: string
+  /** The length of the summary in tokens */
+  length?: number
+  /** How many times longer (than final length) are the intermediate summaries generated */
+  intermediateFactor?: number
+  /** The maximum number of iterations to perform */
+  maxIterations?: number
+  /** Sliding window options */
+  sliding?: {
+    window: number
+    overlap: number
+  }
+}
+
 const Options = z.object({
   prompt: z
     .string()
@@ -36,32 +58,105 @@ const Options = z.object({
 
 declare module '@botpress/zai' {
   interface Zai {
-    /** Summarizes a text of any length to a summary of the desired length */
-    summarize(original: string, options?: Options): Promise<string>
+    /**
+     * Summarizes text of any length to a target length using intelligent chunking strategies.
+     *
+     * This operation can handle documents from a few paragraphs to entire books. It uses
+     * two strategies based on document size:
+     * - **Sliding window**: For moderate documents, processes overlapping chunks iteratively
+     * - **Merge sort**: For very large documents, recursively summarizes and merges
+     *
+     * @param original - The text to summarize
+     * @param options - Configuration for length, focus, format, and chunking strategy
+     * @returns Response promise resolving to the summary text
+     *
+     * @example Basic summarization
+     * ```typescript
+     * const article = "Long article text here..."
+     * const summary = await zai.summarize(article, {
+     *   length: 100 // Target 100 tokens (~75 words)
+     * })
+     * ```
+     *
+     * @example Custom focus and format
+     * ```typescript
+     * const meetingNotes = "... detailed meeting transcript ..."
+     * const summary = await zai.summarize(meetingNotes, {
+     *   length: 200,
+     *   prompt: 'Key decisions, action items, and next steps',
+     *   format: 'Bullet points with clear sections for Decisions, Actions, and Next Steps'
+     * })
+     * ```
+     *
+     * @example Summarizing very large documents
+     * ```typescript
+     * const book = await readFile('large-book.txt', 'utf-8') // 100k+ tokens
+     * const summary = await zai.summarize(book, {
+     *   length: 500,
+     *   intermediateFactor: 4, // Intermediate summaries can be 4x target length
+     *   prompt: 'Main themes, key events, and character development'
+     * })
+     * // Automatically uses merge-sort strategy for efficiency
+     * ```
+     *
+     * @example Technical documentation summary
+     * ```typescript
+     * const docs = "... API documentation ..."
+     * const summary = await zai.summarize(docs, {
+     *   length: 300,
+     *   prompt: 'Core API endpoints, authentication methods, and rate limits',
+     *   format: 'Structured markdown with code examples where relevant'
+     * })
+     * ```
+     *
+     * @example Adjusting chunking strategy
+     * ```typescript
+     * const summary = await zai.summarize(document, {
+     *   length: 150,
+     *   sliding: {
+     *     window: 30000,  // Process 30k tokens at a time
+     *     overlap: 500    // 500 token overlap between windows
+     *   }
+     * })
+     * ```
+     *
+     * @example Progress tracking for long documents
+     * ```typescript
+     * const response = zai.summarize(veryLongDocument, { length: 400 })
+     *
+     * response.on('progress', (usage) => {
+     *   console.log(`Progress: ${Math.round(usage.requests.percentage * 100)}%`)
+     *   console.log(`Tokens used: ${usage.tokens.total}`)
+     * })
+     *
+     * const summary = await response
+     * ```
+     */
+    summarize(original: string, options?: Options): Response<string>
   }
 }
 
 const START = '■START■'
 const END = '■END■'
 
-Zai.prototype.summarize = async function (this: Zai, original, _options) {
-  const options = Options.parse(_options ?? {})
-  const tokenizer = await this.getTokenizer()
-  await this.fetchModelDetails()
+const summarize = async (original: string, options: Options, ctx: ZaiContext): Promise<string> => {
+  ctx.controller.signal.throwIfAborted()
+  const tokenizer = await getTokenizer()
+  const model = await ctx.getModel()
 
-  const INPUT_COMPONENT_SIZE = Math.max(100, (this.ModelDetails.input.maxTokens - PROMPT_INPUT_BUFFER) / 4)
+  const INPUT_COMPONENT_SIZE = Math.max(100, (model.input.maxTokens - PROMPT_INPUT_BUFFER) / 4)
   options.prompt = tokenizer.truncate(options.prompt, INPUT_COMPONENT_SIZE)
   options.format = tokenizer.truncate(options.format, INPUT_COMPONENT_SIZE)
 
-  const maxOutputSize = this.ModelDetails.output.maxTokens - PROMPT_OUTPUT_BUFFER
+  const maxOutputSize = model.output.maxTokens - PROMPT_OUTPUT_BUFFER
   if (options.length > maxOutputSize) {
     throw new Error(
-      `The desired output length is ${maxOutputSize} tokens long, which is more than the maximum of ${this.ModelDetails.output.maxTokens} tokens for this model (${this.ModelDetails.name})`
+      `The desired output length is ${maxOutputSize} tokens long, which is more than the maximum of ${model.output.maxTokens} tokens for this model (${model.name})`
     )
   }
 
   // Ensure the sliding window is not bigger than the model input size
-  options.sliding.window = Math.min(options.sliding.window, this.ModelDetails.input.maxTokens - PROMPT_INPUT_BUFFER)
+  options.sliding.window = Math.min(options.sliding.window, model.input.maxTokens - PROMPT_INPUT_BUFFER)
 
   // Ensure the overlap is not bigger than the window
   // Most extreme case possible (all 3 same size)
@@ -94,9 +189,12 @@ ${newText}
   const chunkSize = Math.ceil(tokens.length / (parts * N))
 
   if (useMergeSort) {
+    const limit = pLimit(10) // Limit to 10 concurrent summarization operations
     const chunks = chunk(tokens, chunkSize).map((x) => x.join(''))
-    const allSummaries = await Promise.all(chunks.map((chunk) => this.summarize(chunk, options)))
-    return this.summarize(allSummaries.join('\n\n============\n\n'), options)
+    const allSummaries = (await Promise.allSettled(chunks.map((chunk) => limit(() => summarize(chunk, options, ctx)))))
+      .filter((x) => x.status === 'fulfilled')
+      .map((x) => x.value)
+    return summarize(allSummaries.join('\n\n============\n\n'), options, ctx)
   }
 
   const summaries: string[] = []
@@ -159,7 +257,7 @@ ${newText}
       }
     }
 
-    const { output } = await this.callModel({
+    let { extracted: result } = await ctx.generateContent({
       systemPrompt: `
 You are summarizing a text. The text is split into ${parts} parts, and you are currently working on part ${iteration}.
 At every step, you will receive the current summary and a new part of the text. You need to amend the summary to include the new information (if needed).
@@ -174,9 +272,14 @@ ${options.format}
       messages: [{ type: 'text', content: format(currentSummary, slice), role: 'user' }],
       maxTokens: generationLength,
       stopSequences: [END],
-    })
+      transform: (text) => {
+        if (!text.trim().length) {
+          throw new Error('The model did not return a valid summary. The response was empty.')
+        }
 
-    let result = output?.choices[0]?.content as string
+        return text
+      },
+    })
 
     if (result.includes(START)) {
       result = result.slice(result.indexOf(START) + START.length)
@@ -192,4 +295,19 @@ ${options.format}
   }
 
   return currentSummary.trim()
+}
+
+Zai.prototype.summarize = function (this: Zai, original, _options): Response<string> {
+  const options = Options.parse(_options ?? {}) as Options
+
+  const context = new ZaiContext({
+    client: this.client,
+    modelId: this.Model,
+    taskId: this.taskId,
+    taskType: 'summarize',
+    adapter: this.adapter,
+    memoizer: this._resolveMemoizer(),
+  })
+
+  return new Response<string, string>(context, summarize(original, options, context), (value) => value)
 }

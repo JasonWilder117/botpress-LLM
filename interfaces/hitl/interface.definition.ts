@@ -1,110 +1,202 @@
-/* bplint-disable */
-import { z, AnyZodObject, messages, InterfaceDefinition } from '@botpress/sdk'
+import * as sdk from '@botpress/sdk'
 
-const withUserId = <S extends z.AnyZodObject>(s: { schema: S }) => ({
+const MAX_ADDITIONAL_DATA_SIZE = 500 // corresponds to max message tag size in the runtime API
+
+type AnyMessageType = { schema: sdk.z.ZodObject }
+const withHitlSpecific = (s: AnyMessageType) => ({
   ...s,
   schema: () =>
     s.schema.extend({
-      userId: z.string().optional().describe('Allows sending a message pretending to be a certain user'),
+      userId: sdk.z.string().optional().describe('Allows sending a message pretending to be a certain user'),
+      additionalData: sdk.z
+        .string()
+        .max(MAX_ADDITIONAL_DATA_SIZE)
+        .optional()
+        .describe(
+          'Additional data to send with the message, useful for custom integrations. Must be encoded in a string.'
+        ),
     }),
 })
 
-const messageSourceSchema = z.union([
-  z.object({ type: z.literal('user'), userId: z.string() }),
-  z.object({ type: z.literal('bot') }),
+const messageSourceSchema = sdk.z.union([
+  sdk.z.object({ type: sdk.z.literal('user'), userId: sdk.z.string() }),
+  sdk.z.object({ type: sdk.z.literal('bot') }),
 ])
 
 const allMessages = {
-  ...messages.defaults,
-  markdown: messages.markdown,
-} satisfies Record<string, { schema: AnyZodObject }>
+  ...sdk.messages.defaults,
+  markdown: sdk.messages.markdown,
+  bloc: sdk.messages.markdownBloc,
+} satisfies Record<string, { schema: sdk.z.AnyZodObject }>
 
 type Tuple<T> = [T, T, ...T[]]
-const messagePayloadSchemas: AnyZodObject[] = Object.entries(allMessages).map(([k, v]) =>
-  z.object({
+const messagePayloadSchemas: sdk.z.AnyZodObject[] = Object.entries(allMessages).map(([k, v]) =>
+  sdk.z.object({
     source: messageSourceSchema,
-    type: z.literal(k),
+    type: sdk.z.literal(k),
     payload: v.schema,
   })
 )
 
-const messageSchema = z.union(messagePayloadSchemas as Tuple<AnyZodObject>)
+const messageSchema = sdk.z.union(messagePayloadSchemas as Tuple<sdk.z.AnyZodObject>)
 
-export default new InterfaceDefinition({
+export default new sdk.InterfaceDefinition({
   name: 'hitl',
-  version: '0.4.0',
-  entities: {},
+  version: '2.1.0',
+  entities: {
+    hitlSession: {
+      title: 'HITL session',
+      description: 'A HITL session, often referred to as a ticket or conversation in external systems',
+      schema: sdk.z.object({}),
+    },
+  },
   events: {
     hitlAssigned: {
+      attributes: {
+        ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO,
+      },
       schema: () =>
-        z.object({
-          conversationId: z.string(),
-          userId: z.string(),
+        sdk.z.object({
+          // Also known as downstreamConversationId:
+          conversationId: sdk.z
+            .string()
+            .title('HITL session ID')
+            .describe('ID of the Botpress conversation representing the HITL session'),
+
+          // Also known as humanAgentUserId:
+          userId: sdk.z
+            .string()
+            .title('Human agent user ID')
+            .describe('ID of the Botpress user representing the human agent assigned to the HITL session'),
         }),
     },
     hitlStopped: {
+      attributes: {
+        ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO,
+      },
       schema: () =>
-        z.object({
-          conversationId: z.string(),
+        sdk.z.object({
+          // Also known as downstreamConversationId:
+          conversationId: sdk.z
+            .string()
+            .title('HITL session ID')
+            .describe('ID of the Botpress conversation representing the HITL session'),
         }),
     },
   },
   actions: {
     // TODO: allow for an interface to extend 'proactiveUser' and reuse its actions
     createUser: {
+      attributes: {
+        ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO,
+      },
+      title: 'Create external user', // <= this is a downstream user
+      description: 'Create an end user in the external service and in Botpress',
       input: {
         schema: () =>
-          z.object({
-            name: z.string().optional(),
-            pictureUrl: z.string().optional(),
-            email: z.string().optional(),
+          sdk.z.object({
+            name: sdk.z.string().title('Display name').describe('Display name of the end user'),
+            pictureUrl: sdk.z.string().title('Picture URL').describe("URL of the end user's avatar").optional(),
+            email: sdk.z.string().title('Email address').describe('Email address of the end user').optional(),
           }),
       },
       output: {
         schema: () =>
-          z.object({
-            userId: z.string(),
+          sdk.z.object({
+            userId: sdk.z
+              .string()
+              .title('Botpress user ID')
+              .describe('ID of the Botpress user representing the end user'),
           }),
       },
     },
     startHitl: {
+      attributes: {
+        ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO,
+      },
+      title: 'Start new HITL session', // <= this is a downstream conversation / ticket
+      description: 'Create a new HITL session in the external service and in Botpress',
       input: {
-        schema: () =>
-          z.object({
-            userId: z.string(),
-            title: z.string(),
-            description: z.string().optional(),
-            messageHistory: z
-              .array(messageSchema)
+        schema: (entities) =>
+          sdk.z.object({
+            // Also known as downstreamUserId:
+            userId: sdk.z.string().title('User ID').describe('ID of the Botpress user representing the end user'),
+
+            // Ticket title:
+            title: sdk.z
+              .string()
+              .title('Title')
+              .describe('Title of the HITL session. This corresponds to a ticket title in systems that use tickets.')
+              .optional(),
+
+            // Ticket description:
+            description: sdk.z
+              .string()
+              .title('Description')
+              .describe(
+                'Description of the HITL session. This corresponds to a ticket description in systems that use tickets.'
+              )
+              .optional(),
+
+            hitlSession: entities.hitlSession
               .optional()
-              .describe('Message history to display in the HITL session'),
+              .title('Extra configuration')
+              .describe('Configuration of the HITL session'),
+
+            // All messages sent prior to HITL session creation:
+            messageHistory: sdk.z
+              .array(messageSchema)
+              .title('Conversation history')
+              .describe(
+                'History of all messages in the conversation up to this point. Should be displayed to the human agent in the external service.'
+              ),
           }),
       },
       output: {
         schema: () =>
-          z.object({
-            conversationId: z.string(),
+          sdk.z.object({
+            // Also known as downstreamConversationId:
+            conversationId: sdk.z
+              .string()
+              .title('HITL session ID')
+              .describe('ID of the Botpress conversation representing the HITL session'),
           }),
       },
     },
     stopHitl: {
+      attributes: {
+        ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO,
+      },
+      title: 'Stop HITL session',
+      description: 'Stop an existing HITL session in the external service',
       input: {
         schema: () =>
-          z.object({
-            conversationId: z.string(),
-            reason: z.enum(['timeout', 'cancel']).optional(),
+          sdk.z.object({
+            // Also known as downstreamConversationId:
+            conversationId: sdk.z
+              .string()
+              .title('HITL session ID')
+              .describe('ID of the Botpress conversation representing the HITL session'),
           }),
       },
       output: {
-        schema: () => z.object({}),
+        schema: () => sdk.z.object({}),
       },
     },
   },
   channels: {
     hitl: {
       messages: {
-        text: withUserId(messages.defaults.text),
+        text: withHitlSpecific(sdk.messages.defaults.text),
+        image: withHitlSpecific(sdk.messages.defaults.image),
+        audio: withHitlSpecific(sdk.messages.defaults.audio),
+        video: withHitlSpecific(sdk.messages.defaults.video),
+        file: withHitlSpecific(sdk.messages.defaults.file),
+        bloc: withHitlSpecific(sdk.messages.markdownBloc), // TODO: use the actual bloc message when bumping a version of the interface
       },
     },
+  },
+  __advanced: {
+    useLegacyZuiTransformer: true,
   },
 })

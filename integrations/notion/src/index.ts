@@ -1,35 +1,23 @@
-import { addCommentToDiscussion, addCommentToPage, addPageToDb, deleteBlock, getDb } from './actions'
+import { posthogHelper } from '@botpress/common'
+import { INTEGRATION_NAME, INTEGRATION_VERSION } from 'integration.definition'
+import { actions } from './actions'
+import { register, unregister } from './setup'
+import { handler } from './webhook-events'
 import * as bp from '.botpress'
 
-class NotImplementedError extends Error {
-  public constructor() {
-    super('Not implemented')
-  }
+const integrationConfig: bp.IntegrationProps = {
+  register,
+  unregister,
+  actions,
+  channels: {},
+  handler,
 }
 
-export default new bp.Integration({
-  createConversation: async ({ client, channel }) => {
-    const { conversation } = await client.getOrCreateConversation({
-      channel,
-      tags: {},
-    })
-    return {
-      body: JSON.stringify({ conversation: { id: conversation.id } }),
-      headers: {},
-      statusCode: 200,
-    }
+export default posthogHelper.wrapIntegration(
+  {
+    integrationName: INTEGRATION_NAME,
+    key: bp.secrets.POSTHOG_KEY,
+    integrationVersion: INTEGRATION_VERSION,
   },
-  channels: {},
-  register: async () => {},
-  unregister: async () => {},
-  actions: {
-    deleteBlock,
-    addCommentToDiscussion,
-    addCommentToPage,
-    addPageToDb,
-    getDb,
-  },
-  handler: async () => {
-    throw new NotImplementedError()
-  },
-})
+  integrationConfig
+)

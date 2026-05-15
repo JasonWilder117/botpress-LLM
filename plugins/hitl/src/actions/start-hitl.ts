@@ -1,11 +1,13 @@
 import * as sdk from '@botpress/sdk'
 import { DEFAULT_HITL_HANDOFF_MESSAGE } from '../../plugin.definition'
+import * as configuration from '../configuration'
 import * as conv from '../conv-manager'
+import type * as types from '../types'
 import * as user from '../user-linker'
 import * as bp from '.botpress'
 
-type StartHitlInput = bp.interfaces.hitl.actions.startHitl.input.Input
-type MessageHistoryElement = NonNullable<StartHitlInput['messageHistory']>[number]
+type StartHitlInput = bp.actions.startHitl.input.Input
+type MessageHistoryElement = NonNullable<bp.interfaces.hitl.actions.startHitl.input.Input['messageHistory']>[number]
 type Props = Parameters<bp.PluginProps['actions']['startHitl']>[0]
 
 export const startHitl: bp.PluginProps['actions']['startHitl'] = async (props) => {
@@ -17,9 +19,8 @@ export const startHitl: bp.PluginProps['actions']['startHitl'] = async (props) =
     throw new sdk.RuntimeError('userId is required to start HITL')
   }
 
-  const upstreamCm = conv.ConversationManager.from(props, upstreamConversationId)
-
-  const { conversation: upstreamConversation } = await props.client.getConversation({ id: upstreamConversationId })
+  const upstreamConversation = await props.conversations.hitl.hitl.getById({ id: upstreamConversationId })
+  const upstreamCm = conv.ConversationManager.from(props, upstreamConversation)
 
   if (upstreamConversation.tags.upstream || upstreamConversation.integration === props.interfaces.hitl.name) {
     // Without this check, closing the downstream conversation (the ticket) can
@@ -34,7 +35,7 @@ export const startHitl: bp.PluginProps['actions']['startHitl'] = async (props) =
     return {}
   }
 
-  const lastMessageByUser = await _getLastUserMessageId(props)
+  const lastMessageByUser = await _getLastUserMessageId({ upstreamConversation })
 
   if (upstreamConversation.tags.startMessageId && upstreamConversation.tags.startMessageId === lastMessageByUser) {
     // This is a hack because of a bug in the studio or webchat that causes it
@@ -42,40 +43,46 @@ export const startHitl: bp.PluginProps['actions']['startHitl'] = async (props) =
     return {}
   }
 
-  await _sendHandoffMessage(props, upstreamCm)
+  const sessionConfig = await configuration.configureNewHitlSession({
+    ...props,
+    upstreamConversationId,
+    configurationOverrides: props.input.configurationOverrides,
+  })
+  await _sendHandoffMessage(upstreamCm, sessionConfig)
 
   const users = new user.UserLinker(props)
   const downstreamUserId = await users.getDownstreamUserId(upstreamUserId, { email: upstreamUserEmail })
 
-  const messageHistory = await _buildMessageHistory(props, upstreamConversationId, users)
+  const messageHistory = await _buildMessageHistory(upstreamConversation, users)
 
-  const downstreamConversationId = await _createDownstreamConversation(
+  const downstreamConversation = await _createDownstreamConversation(
     props,
     downstreamUserId,
     props.input,
     messageHistory
   )
-  const downstreamCm = conv.ConversationManager.from(props, downstreamConversationId)
+  const downstreamCm = conv.ConversationManager.from(props, downstreamConversation)
 
-  await _linkConversations(props, upstreamConversationId, downstreamConversationId)
-  await _saveStartMessageId(props, lastMessageByUser)
+  await upstreamCm.setUserId(upstreamUserId)
+
+  await _linkConversations(upstreamConversation, downstreamConversation)
+  await _saveStartMessageId({ upstreamConversation, startMessageId: lastMessageByUser })
   await _activateHitl(upstreamCm, downstreamCm)
-  await _startHitlTimeout(props, upstreamCm, downstreamCm, upstreamUserId)
+  await _startHitlTimeout(props, upstreamCm, downstreamCm, upstreamUserId, sessionConfig)
 
   return {}
 }
 
-const _sendHandoffMessage = (props: Props, upstreamCm: conv.ConversationManager): Promise<void> =>
-  upstreamCm.respond({
-    text: props.configuration.onHitlHandoffMessage ?? DEFAULT_HITL_HANDOFF_MESSAGE,
-  })
+const _sendHandoffMessage = (
+  upstreamCm: conv.ConversationManager,
+  sessionConfig: bp.configuration.Configuration
+): Promise<void> => upstreamCm.maybeRespondText(sessionConfig.onHitlHandoffMessage, DEFAULT_HITL_HANDOFF_MESSAGE)
 
 const _buildMessageHistory = async (
-  props: Props,
-  upstreamConversationId: string,
+  upstreamConversation: types.ActionableConversation,
   users: user.UserLinker
 ): Promise<MessageHistoryElement[]> => {
-  const { messages: upstreamMessages } = await props.client.listMessages({ conversationId: upstreamConversationId })
+  const upstreamMessages = await upstreamConversation.listMessages().takePage(1)
 
   // Sort messages by creation date, with the oldest first:
   upstreamMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
@@ -105,30 +112,32 @@ const _createDownstreamConversation = async (
   downstreamUserId: string,
   input: StartHitlInput,
   messageHistory: MessageHistoryElement[]
-): Promise<string> => {
+): Promise<types.ActionableConversation> => {
   // Call startHitl in the hitl integration (zendesk, etc.):
   const { conversationId: downstreamConversationId } = await props.actions.hitl.startHitl({
     title: input.title,
     description: input.description,
+    hitlSession: input.hitlSession,
     userId: downstreamUserId,
     messageHistory,
   })
 
-  return downstreamConversationId
+  return await props.conversations.hitl.hitl.getById({ id: downstreamConversationId })
 }
 
-const _linkConversations = (props: Props, upstreamConversationId: string, downstreamConversationId: string) =>
+const _linkConversations = (
+  upstreamConversation: types.ActionableConversation,
+  downstreamConversation: types.ActionableConversation
+) =>
   Promise.all([
-    props.client.updateConversation({
-      id: upstreamConversationId,
+    upstreamConversation.update({
       tags: {
-        downstream: downstreamConversationId,
+        downstream: downstreamConversation.id,
       },
     }),
-    props.client.updateConversation({
-      id: downstreamConversationId,
+    downstreamConversation.update({
       tags: {
-        upstream: upstreamConversationId,
+        upstream: upstreamConversation.id,
       },
     }),
   ])
@@ -140,24 +149,25 @@ const _startHitlTimeout = async (
   props: Props,
   upstreamCm: conv.ConversationManager,
   downstreamCm: conv.ConversationManager,
-  upstreamUserId: string
+  upstreamUserId: string,
+  sessionConfig: bp.configuration.Configuration
 ) => {
-  const { agentAssignedTimeoutSeconds } = props.configuration
+  const { agentAssignedTimeoutSeconds } = sessionConfig
 
   if (!agentAssignedTimeoutSeconds) {
     return
   }
 
-  await props.client.createEvent({
-    type: 'humanAgentAssignedTimeout',
-    payload: {
-      sessionStartedAt: new Date().toISOString(),
-      downstreamConversationId: downstreamCm.conversationId,
-    },
-    conversationId: upstreamCm.conversationId,
-    userId: upstreamUserId,
-    schedule: { delay: agentAssignedTimeoutSeconds * 1000 },
-  })
+  await props.events.humanAgentAssignedTimeout
+    .withConversationId(upstreamCm.conversationId)
+    .withUserId(upstreamUserId)
+    .schedule(
+      {
+        sessionStartedAt: new Date().toISOString(),
+        downstreamConversationId: downstreamCm.conversationId,
+      },
+      { delay: agentAssignedTimeoutSeconds * 1000 }
+    )
 }
 
 /**
@@ -166,33 +176,29 @@ const _startHitlTimeout = async (
  * This is effectively a hack to ensure that the studio/webchat does not call
  * startHitl twice for the same user message.
  */
-const _getLastUserMessageId = async (props: Props): Promise<string | undefined> => {
-  let nextToken: string | undefined
-
-  do {
-    const { messages, meta } = await props.client.listMessages({ conversationId: props.input.conversationId })
-
-    for (const message of messages) {
-      if (message.direction === 'incoming') {
-        return message.id
-      }
+const _getLastUserMessageId = async (props: {
+  upstreamConversation: types.ActionableConversation
+}): Promise<string | undefined> => {
+  for await (const message of props.upstreamConversation.listMessages()) {
+    if (message.direction === 'incoming') {
+      return message.id
     }
-
-    nextToken = meta.nextToken
-  } while (nextToken)
+  }
 
   return
 }
 
-const _saveStartMessageId = async (props: Props, startMessageId: string | undefined) => {
-  if (!startMessageId) {
+const _saveStartMessageId = async (props: {
+  upstreamConversation: types.ActionableConversation
+  startMessageId: string | undefined
+}) => {
+  if (!props.startMessageId) {
     return
   }
 
-  await props.client.updateConversation({
-    id: props.input.conversationId,
+  await props.upstreamConversation.update({
     tags: {
-      startMessageId,
+      startMessageId: props.startMessageId,
     },
   })
 }

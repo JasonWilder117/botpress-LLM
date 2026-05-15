@@ -20,29 +20,48 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
       await this._runBuild() // This ensures the bundle is always synced with source code
     }
 
-    const projectDef = await this.readProjectDefinitionFromFS()
+    const { projectType, resolveProjectDefinition } = this.readProjectDefinitionFromFS()
 
-    if (projectDef.type === 'integration') {
+    if (projectType === 'integration') {
+      const projectDef = await resolveProjectDefinition()
       return this._deployIntegration(api, projectDef.definition)
     }
-    if (projectDef.type === 'interface') {
+    if (projectType === 'interface') {
+      const projectDef = await resolveProjectDefinition()
       return this._deployInterface(api, projectDef.definition)
     }
-    if (projectDef.type === 'plugin') {
+    if (projectType === 'plugin') {
+      const projectDef = await resolveProjectDefinition()
       return this._deployPlugin(api, projectDef.definition)
     }
-    if (projectDef.type === 'bot') {
+    if (projectType === 'bot') {
+      const projectDef = await resolveProjectDefinition()
       return this._deployBot(api, projectDef.definition, this.argv.botId, this.argv.createNewBot)
     }
     throw new errors.UnsupportedProjectType()
   }
 
   private async _runBuild() {
-    return new BuildCommand(this.api, this.prompt, this.logger, this.argv).run()
+    return new BuildCommand(this.api, this.prompt, this.logger, this.argv).setProjectContext(this.projectContext).run()
+  }
+
+  private get _visibility(): 'public' | 'private' | 'unlisted' {
+    if (this.argv.public && this.argv.visibility === 'private') {
+      this.logger.warn('The --public flag is deprecated. Please use "--visibility public" instead.')
+      return 'public'
+    }
+
+    if (this.argv.public && this.argv.visibility !== 'private') {
+      this.logger.warn('The --public flag and --visibility option are both present. Ignoring the --public flag...')
+    }
+
+    return this.argv.visibility
   }
 
   private async _deployIntegration(api: apiUtils.ApiClient, integrationDef: sdk.IntegrationDefinition) {
-    const { integration: updatedIntegrationDef, workspaceId } = await this._manageWorkspaceHandle(api, integrationDef)
+    const res = await this.manageWorkspaceHandle(api, integrationDef)
+    if (!res) return
+    const { integration: updatedIntegrationDef, workspaceId } = res
     integrationDef = updatedIntegrationDef
     if (workspaceId) {
       api = api.switchWorkspace(workspaceId)
@@ -58,16 +77,16 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
       throw new errors.BotpressCLIError('Readme must be a Markdown file')
     }
 
-    const integration = await api.findIntegration({ type: 'name', name, version })
+    const integration = await api.findPublicOrPrivateIntegration({ type: 'name', name, version })
     if (integration && integration.workspaceId !== api.workspaceId) {
       throw new errors.BotpressCLIError(
         `Public integration ${name} v${version} is already deployed in another workspace.`
       )
     }
 
-    if (integration && integration.public && !api.isBotpressWorkspace) {
-      throw new errors.BotpressCLIError(
-        `Integration ${name} v${version} is already deployed publicly and cannot be updated. Please bump the version.`
+    if (integration && integration.visibility !== 'private' && !api.isBotpressWorkspace) {
+      this.logger.warn(
+        `Integration ${name} v${version} is already deployed publicly and cannot be updated. You should publish a new version instead.`
       )
     }
 
@@ -90,7 +109,9 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
     const createBody = {
       ...(await this.prepareCreateIntegrationBody(integrationDef)),
       ...(await this.prepareIntegrationDependencies(integrationDef, api)),
-      public: this.argv.public,
+      visibility: this._visibility,
+      sdkVersion: integrationDef.metadata?.sdkVersion,
+      url: this.argv.url,
     }
 
     const startedMessage = `Deploying integration ${chalk.bold(name)} v${version}...`
@@ -161,12 +182,22 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
   }
 
   private async _deployInterface(api: apiUtils.ApiClient, interfaceDeclaration: sdk.InterfaceDefinition) {
-    if (!api.isBotpressWorkspace) {
-      throw new errors.BotpressCLIError('Your workspace is not allowed to deploy interfaces.')
+    if (this._visibility === 'unlisted') {
+      throw new errors.BotpressCLIError(
+        'Unlisted visibility is not supported for interfaces. Please use "public" or "private".'
+      )
+    }
+
+    if (interfaceDeclaration.icon && !interfaceDeclaration.icon.toLowerCase().endsWith('.svg')) {
+      throw new errors.BotpressCLIError('Icon must be an SVG file')
+    }
+
+    if (interfaceDeclaration.readme && !interfaceDeclaration.readme.toLowerCase().endsWith('.md')) {
+      throw new errors.BotpressCLIError('Readme must be a Markdown file')
     }
 
     const { name, version } = interfaceDeclaration
-    const intrface = await api.findPublicInterface({ type: 'name', name, version })
+    const intrface = await api.findPublicOrPrivateInterface({ type: 'name', name, version })
 
     let message: string
     if (intrface) {
@@ -182,7 +213,22 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
       return
     }
 
-    const createBody = await apiUtils.prepareCreateInterfaceBody(interfaceDeclaration)
+    const icon = await this.readProjectFile(interfaceDeclaration.icon, 'base64')
+    const readme = await this.readProjectFile(interfaceDeclaration.readme, 'base64')
+
+    if (this._visibility !== 'public') {
+      this.logger.warn(
+        'You are currently publishing a private interface, which cannot be used by integrations and plugins. To fix this, change the visibility to "public"'
+      )
+    }
+
+    const createBody = {
+      ...(await apiUtils.prepareCreateInterfaceBody(interfaceDeclaration)),
+      public: this._visibility === 'public',
+      icon,
+      readme,
+      sdkVersion: interfaceDeclaration.metadata?.sdkVersion,
+    }
 
     const startedMessage = `Deploying interface ${chalk.bold(name)} v${version}...`
     const successMessage = 'Interface deployed'
@@ -237,7 +283,7 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
       throw new errors.BotpressCLIError('Readme must be a Markdown file')
     }
 
-    const plugin = await api.findPublicPlugin({ type: 'name', name, version })
+    const plugin = await api.findPublicOrPrivatePlugin({ type: 'name', name, version })
 
     let message: string
     if (plugin) {
@@ -261,12 +307,14 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
     const createBody = {
       ...(await apiUtils.prepareCreatePluginBody(pluginDef)),
       ...(await this.preparePluginDependencies(pluginDef, api)),
+      visibility: this._visibility,
       icon,
       readme,
       code: {
         node: codeCJS,
         browser: codeESM,
       },
+      sdkVersion: pluginDef.metadata?.sdkVersion,
     }
 
     const startedMessage = `Deploying plugin ${chalk.bold(name)} v${version}...`
@@ -407,15 +455,25 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
       bot
     )
 
+    updateBotBody.secrets = await this.promptSecrets(botDefinition, this.argv, { knownSecrets: bot.secrets })
+
     const { bot: updatedBot } = await api.client.updateBot(updateBotBody).catch((thrown) => {
       throw errors.BotpressCLIError.wrap(thrown, `Could not update bot "${bot.name}"`)
     })
+
+    this.validateIntegrationRegistration(updatedBot, (failedIntegrations) =>
+      this.logger.warn(
+        `Some integrations failed to register:\n${Object.entries(failedIntegrations)
+          .map(([key, int]) => `• ${key}: ${int.statusReason}`)
+          .join('\n')}`
+      )
+    )
 
     const tablesPublisher = new tables.TablesPublisher({ api, logger: this.logger, prompt: this.prompt })
     await tablesPublisher.deployTables({ botId: updatedBot.id, botDefinition })
 
     line.success('Bot deployed')
-    this.displayWebhookUrls(updatedBot)
+    await this.displayIntegrationUrls({ api, bot: updatedBot })
   }
 
   private async _createNewBot(api: apiUtils.ApiClient): Promise<client.Bot> {
@@ -459,127 +517,5 @@ export class DeployCommand extends ProjectCommand<DeployCommandDefinition> {
     })
 
     return fetchedBot
-  }
-
-  private async _manageWorkspaceHandle(
-    api: apiUtils.ApiClient,
-    integration: sdk.IntegrationDefinition
-  ): Promise<{
-    integration: sdk.IntegrationDefinition
-    workspaceId?: string // Set if user opted to deploy on another available workspace
-  }> {
-    const { name: localName, workspaceHandle: localHandle } = this._parseIntegrationName(integration.name)
-    if (!localHandle && api.isBotpressWorkspace) {
-      this.logger.debug('Botpress workspace detected; workspace handle omitted')
-      return { integration } // botpress has the right to omit workspace handle
-    }
-
-    const { handle: remoteHandle, name: workspaceName } = await api.getWorkspace().catch((thrown) => {
-      throw errors.BotpressCLIError.wrap(thrown, 'Could not fetch workspace')
-    })
-
-    if (localHandle && remoteHandle) {
-      let workspaceId: string | undefined = undefined
-      if (localHandle !== remoteHandle) {
-        const remoteWorkspace = await api.findWorkspaceByHandle(localHandle).catch((thrown) => {
-          throw errors.BotpressCLIError.wrap(thrown, 'Could not list workspaces')
-        })
-        if (!remoteWorkspace) {
-          throw new errors.BotpressCLIError(
-            `The integration handle "${localHandle}" is not associated with any of your workspaces.`
-          )
-        }
-        this.logger.warn(
-          `Your are logged in to workspace "${workspaceName}" but integration handle "${localHandle}" belongs to "${remoteWorkspace.name}".`
-        )
-        const confirmUseAlternateWorkspace = await this.prompt.confirm(
-          'Do you want to deploy integration on this workspace instead?'
-        )
-        if (!confirmUseAlternateWorkspace) {
-          throw new errors.BotpressCLIError(
-            `Cannot deploy integration with handle "${localHandle}" on workspace "${workspaceName}"`
-          )
-        }
-
-        workspaceId = remoteWorkspace.id
-      }
-      return { integration, workspaceId }
-    }
-
-    const workspaceHandleIsMandatoryMsg = 'Cannot deploy integration without workspace handle'
-
-    if (!localHandle && remoteHandle) {
-      const confirmAddHandle = await this.prompt.confirm(
-        `Your current workspace handle is "${remoteHandle}". Do you want to use the name "${remoteHandle}/${localName}"?`
-      )
-      if (!confirmAddHandle) {
-        throw new errors.BotpressCLIError(workspaceHandleIsMandatoryMsg)
-      }
-      const newName = `${remoteHandle}/${localName}`
-      return { integration: new sdk.IntegrationDefinition({ ...integration, name: newName }) }
-    }
-
-    if (localHandle && !remoteHandle) {
-      const { available } = await api.client.checkHandleAvailability({ handle: localHandle }).catch((thrown) => {
-        throw errors.BotpressCLIError.wrap(thrown, 'Could not check handle availability')
-      })
-
-      if (!available) {
-        throw new errors.BotpressCLIError(`Handle "${localHandle}" is not yours and is not available`)
-      }
-
-      const confirmClaimHandle = await this.prompt.confirm(
-        `Handle "${localHandle}" is available. Do you want to claim it for your workspace ${workspaceName}?`
-      )
-      if (!confirmClaimHandle) {
-        throw new errors.BotpressCLIError(workspaceHandleIsMandatoryMsg)
-      }
-
-      await api.updateWorkspace({ handle: localHandle }).catch((thrown) => {
-        throw errors.BotpressCLIError.wrap(thrown, `Could not claim handle "${localHandle}"`)
-      })
-
-      this.logger.success(`Handle "${localHandle}" is now yours!`)
-      return { integration }
-    }
-
-    this.logger.warn("It seems you don't have a workspace handle yet.")
-    let claimedHandle: string | undefined = undefined
-    do {
-      const prompted = await this.prompt.text('Please enter a workspace handle')
-      if (!prompted) {
-        throw new errors.BotpressCLIError(workspaceHandleIsMandatoryMsg)
-      }
-
-      const { available, suggestions } = await api.client.checkHandleAvailability({ handle: prompted })
-      if (!available) {
-        this.logger.warn(`Handle "${prompted}" is not available. Suggestions: ${suggestions.join(', ')}`)
-        continue
-      }
-
-      claimedHandle = prompted
-      await api.updateWorkspace({ handle: claimedHandle }).catch((thrown) => {
-        throw errors.BotpressCLIError.wrap(thrown, `Could not claim handle "${claimedHandle}"`)
-      })
-    } while (!claimedHandle)
-
-    this.logger.success(`Handle "${claimedHandle}" is yours!`)
-    const newName = `${claimedHandle}/${localName}`
-    return { integration: new sdk.IntegrationDefinition({ ...integration, name: newName }) }
-  }
-
-  private _parseIntegrationName = (integrationName: string): { name: string; workspaceHandle?: string } => {
-    const parts = integrationName.split('/')
-    if (parts.length > 2) {
-      throw new errors.BotpressCLIError(
-        `Invalid integration name "${integrationName}": a single forward slash is allowed`
-      )
-    }
-    if (parts.length === 2) {
-      const [workspaceHandle, name] = parts as [string, string]
-      return { name, workspaceHandle }
-    }
-    const [name] = parts as [string]
-    return { name }
   }
 }

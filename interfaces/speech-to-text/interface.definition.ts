@@ -1,10 +1,9 @@
-/* bplint-disable */
 import * as common from '@botpress/common'
 import { z, InterfaceDefinition } from '@botpress/sdk'
 
 export default new InterfaceDefinition({
-  name: 'speechToText',
-  version: '2.0.0',
+  name: 'speech-to-text',
+  version: '2.0.2',
   entities: {
     speechToTextModelRef: {
       schema: common.speechToText.schemas.SpeechModelRefSchema,
@@ -33,5 +32,8 @@ export default new InterfaceDefinition({
           }),
       },
     },
+  },
+  __advanced: {
+    useLegacyZuiTransformer: true,
   },
 })

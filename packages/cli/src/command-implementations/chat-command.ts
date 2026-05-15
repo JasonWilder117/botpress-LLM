@@ -10,7 +10,7 @@ import * as utils from '../utils'
 import { GlobalCommand } from './global-command'
 
 type IntegrationInstance = {
-  id: string
+  alias: string
   instance: client.Bot['integrations'][string]
 }
 
@@ -55,7 +55,7 @@ export class ChatCommand extends GlobalCommand<ChatCommandDefinition> {
     convLine.success(`Conversation created with id "${conversation.id}"`)
     convLine.commit()
 
-    const chat = Chat.launch({ client, conversationId: conversation.id })
+    const chat = Chat.launch({ client, conversationId: conversation.id, protocol: this.argv.protocol })
     await chat.wait()
   }
 
@@ -112,7 +112,8 @@ export class ChatCommand extends GlobalCommand<ChatCommandDefinition> {
     const { bot } = await api.client.updateBot({
       id: botId,
       integrations: {
-        [integration.id]: {
+        [integration.name]: {
+          integrationId: integration.id,
           enabled: true,
           configuration: {}, // empty object will always be a valid chat integration configuration
         },
@@ -122,18 +123,25 @@ export class ChatCommand extends GlobalCommand<ChatCommandDefinition> {
     line.success('Chat integration installed')
     line.commit()
 
-    return this._findChatInstance(bot)!
+    const inst = this._findChatInstance(bot)
+    if (!inst) {
+      throw new errors.BotpressCLIError('Chat integration was installed but could not be found')
+    }
+
+    return inst
   }
 
   private _findChatInstance = (bot: client.Bot): IntegrationInstance | undefined => {
-    const integrationInstances = Object.entries(bot.integrations).map(([integrationId, integrationInstance]) => ({
-      id: integrationId,
+    const integrationInstances = Object.entries(bot.integrations).map(([alias, integrationInstance]) => ({
+      alias,
       instance: integrationInstance,
     }))
 
     const targetChatVersion = this._getChatApiTargetVersionRange()
     return integrationInstances.find(
-      (i) => i.instance.name === 'chat' && semver.satisfies(i.instance.version, targetChatVersion)
+      (i) =>
+        i.instance.name === 'chat' &&
+        (semver.satisfies(i.instance.version, targetChatVersion) || i.instance.version === 'dev')
     )
   }
 

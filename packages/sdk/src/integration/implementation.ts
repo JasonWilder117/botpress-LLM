@@ -9,6 +9,7 @@ import {
   CreateConversationHandler as CreateConversationFunction,
   ActionHandlers as ActionFunctions,
   ChannelHandlers as ChannelFunctions,
+  UnknownOperationHandler as UnknownOperationFunction,
   integrationHandler,
 } from './server'
 
@@ -26,6 +27,10 @@ export type IntegrationImplementationProps<TIntegration extends BaseIntegration 
   createConversation?: CreateConversationFunction<TIntegration>
   actions: ActionFunctions<TIntegration>
   channels: ChannelFunctions<TIntegration>
+  __advanced?: {
+    unknownOperationHandler?: UnknownOperationFunction<TIntegration>
+    managesOwnTracePropagation?: boolean
+  }
 }
 
 export class IntegrationImplementation<TIntegration extends BaseIntegration = BaseIntegration> {
@@ -36,6 +41,12 @@ export class IntegrationImplementation<TIntegration extends BaseIntegration = Ba
   public readonly createUser: IntegrationImplementationProps<TIntegration>['createUser']
   public readonly createConversation: IntegrationImplementationProps<TIntegration>['createConversation']
   public readonly webhook: IntegrationImplementationProps<TIntegration>['handler']
+  public readonly unknownOperationHandler: NonNullable<
+    IntegrationImplementationProps<TIntegration>['__advanced']
+  >['unknownOperationHandler']
+  public readonly managesOwnTracePropagation: NonNullable<
+    IntegrationImplementationProps<TIntegration>['__advanced']
+  >['managesOwnTracePropagation']
 
   public constructor(public readonly props: IntegrationImplementationProps<TIntegration>) {
     this.actions = props.actions
@@ -45,6 +56,8 @@ export class IntegrationImplementation<TIntegration extends BaseIntegration = Ba
     this.createUser = props.createUser
     this.createConversation = props.createConversation
     this.webhook = props.handler
+    this.unknownOperationHandler = props.__advanced?.unknownOperationHandler
+    this.managesOwnTracePropagation = props.__advanced?.managesOwnTracePropagation
   }
 
   public readonly handler = integrationHandler(this as IntegrationImplementation<any>)

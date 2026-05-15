@@ -1,23 +1,8 @@
-import { IntegrationLogger } from '@botpress/sdk'
-import axios from 'axios'
+import { IntegrationLogger, RuntimeError } from '@botpress/sdk'
+import Firecrawl, { SdkError } from '@mendable/firecrawl-js'
 import { FullPage } from 'src/definitions/actions'
+import { trackEvent } from '../tracking'
 import * as bp from '.botpress'
-
-type FireCrawlResponse = {
-  success: boolean
-  data: {
-    markdown: string
-    metadata: {
-      ogLocaleAlternate: string[]
-      favicon?: string
-      title?: string | string[] | null
-      description?: string | string[] | null
-      sourceURL: string
-      pageStatusCode: number
-    }
-  }
-  returnCode: number
-}
 
 const COST_PER_PAGE = 0.0015
 
@@ -34,32 +19,61 @@ const getPageContent = async (props: {
   url: string
   logger: IntegrationLogger
   waitFor?: number
+  timeout?: number
+  maxAge?: number
 }): Promise<FullPage> => {
+  const firecrawl = new Firecrawl({ apiKey: bp.secrets.FIRECRAWL_API_KEY })
+
   const startTime = Date.now()
-  const { data: result } = await axios.post<FireCrawlResponse>(
-    'https://api.firecrawl.dev/v1/scrape',
-    {
-      url: props.url,
+
+  try {
+    const result = await firecrawl.scrape(props.url, {
       onlyMainContent: true,
+      maxAge: 60 * 60 * 24 * 7, // 1 week
+      removeBase64Images: true,
       waitFor: props.waitFor,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${bp.secrets.FIRECRAWL_API_KEY}`,
-      },
+      timeout: props.timeout,
+      formats: ['markdown', 'rawHtml'],
+      headers: { 'X-Botpress-Crawler': 'botpress' },
+      storeInCache: true,
+    })
+
+    props.logger.forBot().debug(`Firecrawl API call took ${Date.now() - startTime}ms for url: ${props.url}`)
+
+    const contentLength = result.markdown?.length || 0
+    const isLargePage = contentLength > 50000
+
+    if (isLargePage) {
+      await trackEvent('large_page_scraped', {
+        url: props.url,
+        contentLength,
+        durationMs: Date.now() - startTime,
+      })
     }
-  )
 
-  props.logger.forBot().info(`Browsing ${props.url} took ${Date.now() - startTime}ms`)
+    return {
+      url: props.url,
+      content: result.markdown!,
+      raw: result.rawHtml!,
+      favicon: fixOutput(result.metadata?.favicon),
+      title: fixOutput(result.metadata?.title),
+      description: fixOutput(result.metadata?.description),
+    }
+  } catch (err) {
+    props.logger.error('There was an error while calling Firecrawl API.', err)
 
-  const { metadata, markdown } = result.data
+    if (err instanceof SdkError) {
+      const isRateLimit = err.status === 429 || err.message.includes('rate limit')
+      await trackEvent('firecrawl_error', {
+        url: props.url,
+        errorType: isRateLimit ? 'rate_limited' : 'api_error',
+        errorMessage: err.message,
+        statusCode: err.status,
+        errorCode: err.code,
+      })
+    }
 
-  return {
-    url: props.url,
-    content: markdown,
-    favicon: fixOutput(metadata.favicon),
-    title: fixOutput(metadata.title),
-    description: fixOutput(metadata.description),
+    throw new RuntimeError(`There was an error while browsing the page: ${props.url}`)
   }
 }
 
@@ -68,16 +82,23 @@ export const browsePages: bp.IntegrationProps['actions']['browsePages'] = async 
 
   try {
     const pageContentPromises = await Promise.allSettled(
-      input.urls.map((url) => getPageContent({ url, logger, waitFor: input.waitFor }))
+      input.urls.map((url) => getPageContent({ url, logger, waitFor: input.waitFor, timeout: input.timeout }))
     )
 
     const results = pageContentPromises
-      .filter((promise): promise is PromiseFulfilledResult<any> => promise.status === 'fulfilled')
+      .filter((promise): promise is PromiseFulfilledResult<FullPage> => promise.status === 'fulfilled')
       .map((result) => result.value)
 
     // only charging for successful pages
     const cost = results.length * COST_PER_PAGE
     metadata.setCost(cost)
+
+    await trackEvent('pages_browsed', {
+      urlCount: input.urls.length,
+      successCount: results.length,
+      failedCount: input.urls.length - results.length,
+      durationMs: Date.now() - startTime,
+    })
 
     return {
       results,
@@ -86,6 +107,6 @@ export const browsePages: bp.IntegrationProps['actions']['browsePages'] = async 
     logger.forBot().error('There was an error while browsing the page.', err)
     throw err
   } finally {
-    logger.forBot().info(`Browsing took ${Date.now() - startTime}ms`)
+    logger.forBot().info(`Browsing ${input.urls.length} urls took ${Date.now() - startTime}ms`)
   }
 }

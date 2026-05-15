@@ -13,6 +13,15 @@ export class BotSpecificClient<TBot extends common.BaseBot> implements types.Cli
     private _hooks: types.ClientHooks = { before: {}, after: {} }
   ) {}
 
+  /**
+   * Access the underlying Botpress client.
+   * This is useful for operations that are not available in the BotSpecificClient.
+   * You probably shouldn't use this directly if you don't know what you're doing.
+   */
+  public get _inner(): client.Client {
+    return this._client
+  }
+
   public getConversation: types.GetConversation<TBot> = ((x) =>
     this._run('getConversation', x)) as types.GetConversation<TBot>
   public listConversations: types.ListConversations<TBot> = ((x) =>
@@ -33,8 +42,6 @@ export class BotSpecificClient<TBot extends common.BaseBot> implements types.Cli
   public getEvent: types.GetEvent<TBot> = ((x) => this._run('getEvent', x)) as types.GetEvent<TBot>
   public listEvents: types.ListEvents<TBot> = ((x) => this._run('listEvents', x)) as types.ListEvents<TBot>
   public createMessage: types.CreateMessage<TBot> = ((x) => this._run('createMessage', x)) as types.CreateMessage<TBot>
-  public getOrCreateMessage: types.GetOrCreateMessage<TBot> = ((x) =>
-    this._run('getOrCreateMessage', x)) as types.GetOrCreateMessage<TBot>
   public getMessage: types.GetMessage<TBot> = ((x) => this._run('getMessage', x)) as types.GetMessage<TBot>
   public updateMessage: types.UpdateMessage<TBot> = ((x) => this._run('updateMessage', x)) as types.UpdateMessage<TBot>
   public listMessages: types.ListMessages<TBot> = ((x) => this._run('listMessages', x)) as types.ListMessages<TBot>
@@ -70,6 +77,8 @@ export class BotSpecificClient<TBot extends common.BaseBot> implements types.Cli
     this._run('upsertTableRows', x)) as types.UpsertTableRows<TBot>
   public createWorkflow: types.CreateWorkflow<TBot> = ((x) =>
     this._run('createWorkflow', x)) as types.CreateWorkflow<TBot>
+  public getOrCreateWorkflow: types.GetOrCreateWorkflow<TBot> = ((x) =>
+    this._run('getOrCreateWorkflow', x)) as types.GetOrCreateWorkflow<TBot>
   public getWorkflow: types.GetWorkflow<TBot> = ((x) => this._run('getWorkflow', x)) as types.GetWorkflow<TBot>
   public updateWorkflow: types.UpdateWorkflow<TBot> = ((x) =>
     this._run('updateWorkflow', x)) as types.UpdateWorkflow<TBot>
@@ -107,7 +116,7 @@ export class BotSpecificClient<TBot extends common.BaseBot> implements types.Cli
 
     const after = this._hooks.after[operation]
     if (after) {
-      res = await after(res)
+      res = await after(res, req)
     }
 
     return res

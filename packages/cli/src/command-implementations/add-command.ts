@@ -9,7 +9,13 @@ import * as errors from '../errors'
 import * as pkgRef from '../package-ref'
 import * as utils from '../utils'
 import { GlobalCommand } from './global-command'
-import { ProjectCache, ProjectCommand, ProjectCommandDefinition, ProjectDefinition } from './project-command'
+import {
+  ProjectCache,
+  ProjectCommand,
+  ProjectCommandDefinition,
+  ProjectDefinitionLazy,
+  ProjectDefinition,
+} from './project-command'
 
 type InstallablePackage =
   | {
@@ -25,15 +31,20 @@ type InstallablePackage =
       pkg: codegen.PluginInstallablePackage
     }
 
+type RefWithAlias = pkgRef.PackageRef & { alias?: string }
+
 export type AddCommandDefinition = typeof commandDefinitions.add
 export class AddCommand extends GlobalCommand<AddCommandDefinition> {
   public async run(): Promise<void> {
     const ref = this._parseArgvRef()
     if (ref) {
-      return await this._addSinglePackage(ref)
+      return await this._addNewSinglePackage({ ...ref, alias: this.argv.alias })
     }
 
-    const pkgJson = await utils.pkgJson.readPackageJson(this.argv.installPath)
+    const pkgJson = await utils.pkgJson.readPackageJson(this.argv.installPath).catch((thrown) => {
+      throw errors.BotpressCLIError.wrap(thrown, 'Failed to read package.json file')
+    })
+
     if (!pkgJson) {
       this.logger.warn('No package.json found in the install path')
       return
@@ -51,13 +62,23 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
       throw new errors.BotpressCLIError('Invalid bpDependencies found in package.json')
     }
 
+    const baseInstallPath = utils.path.absoluteFrom(utils.path.cwd(), this.argv.installPath)
+    const modulesPath = utils.path.join(baseInstallPath, consts.installDirName)
+    fslib.rmSync(modulesPath, { force: true, recursive: true })
+    fslib.mkdirSync(modulesPath)
+
     for (const [pkgAlias, pkgRefStr] of Object.entries(parseResults.data)) {
       const parsed = pkgRef.parsePackageRef(pkgRefStr)
       if (!parsed) {
         throw new errors.InvalidPackageReferenceError(pkgRefStr)
       }
 
-      await this._addSinglePackage({ ...parsed, alias: pkgAlias })
+      // Resolve path refs against installPath so reinstall works regardless of cwd
+      const normalized =
+        parsed.type === 'path' ? { ...parsed, path: utils.path.absoluteFrom(baseInstallPath, parsed.path) } : parsed
+      const refWithAlias = { ...normalized, alias: pkgAlias }
+      const foundPkg = await this._findPackage(refWithAlias)
+      await this._addSinglePackage(refWithAlias, foundPkg)
     }
   }
 
@@ -71,46 +92,26 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
       throw new errors.InvalidPackageReferenceError(this.argv.packageRef)
     }
 
-    if (parsed.type !== 'name') {
-      return parsed
-    }
-
-    const argvPkgType = this.argv.packageType
-    if (!argvPkgType) {
-      return parsed
-    }
-
-    const ref = { ...parsed, pkg: argvPkgType }
-
-    const strRef = pkgRef.formatPackageRef(ref)
-    this.logger.warn(`argument --packageType is deprecated; please use the package reference format "${strRef}"`)
-
-    return ref
+    return parsed
   }
 
-  private async _addSinglePackage(ref: pkgRef.PackageRef & { alias?: string }): Promise<void> {
-    const targetPackage = ref.type === 'path' ? await this._findLocalPackage(ref) : await this._findRemotePackage(ref)
+  private async _addSinglePackage(
+    ref: RefWithAlias,
+    props: { packageName: string; targetPackage: InstallablePackage }
+  ) {
+    const { packageName, targetPackage } = props
 
-    if (!targetPackage) {
-      const strRef = pkgRef.formatPackageRef(ref)
-      throw new errors.BotpressCLIError(`Could not find package "${strRef}"`)
-    }
-
-    const packageName = ref.alias ?? targetPackage.pkg.name
     const baseInstallPath = utils.path.absoluteFrom(utils.path.cwd(), this.argv.installPath)
     const packageDirName = utils.casing.to.kebabCase(packageName)
     const installPath = utils.path.join(baseInstallPath, consts.installDirName, packageDirName)
 
     const alreadyInstalled = fslib.existsSync(installPath)
     if (alreadyInstalled) {
-      this.logger.warn(`Package with name "${packageName}" already installed.`)
-      const res = await this.prompt.confirm('Do you want to overwrite the existing package?')
-      if (!res) {
-        this.logger.log('Aborted')
-        return
-      }
-
       await this._uninstall(installPath)
+    }
+
+    if (ref.type === 'name') {
+      targetPackage.pkg.version = ref.version
     }
 
     let files: codegen.File[]
@@ -127,27 +128,87 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
 
     await this._install(installPath, files)
   }
+  private async _chooseNewAlias(existingPackages: Record<string, string>) {
+    const setAliasConfirmation = await this.prompt.confirm(
+      'Do you want to set an alias to the package you are installing?'
+    )
+    if (!setAliasConfirmation) {
+      throw new errors.AbortedOperationError()
+    }
+
+    const alias = this._chooseUnusedAlias(existingPackages)
+
+    return alias
+  }
+
+  private async _chooseUnusedAlias(existingPackages: Record<string, string>): Promise<string> {
+    const alias = await this.prompt.text('Enter the new alias')
+    const existingAlias = Object.entries(existingPackages).find(([dep, _]) => dep === alias)
+
+    if (!alias) {
+      throw new errors.BotpressCLIError('You cannot set an empty alias')
+    }
+    if (!existingAlias) {
+      return alias
+    }
+
+    if (
+      await this.prompt.confirm(
+        `The alias ${alias} is already used for dependency ${existingAlias[1]}. Do you want to overwrite it?`
+      )
+    ) {
+      return alias
+    }
+    return this._chooseUnusedAlias(existingPackages)
+  }
+
+  private async _addNewSinglePackage(ref: RefWithAlias) {
+    const foundPackage = await this._findPackage(ref)
+    const targetPackage = foundPackage.targetPackage
+    const isDevPackage = targetPackage.type === 'integration' && !!targetPackage.pkg.devId
+    let packageName: string
+    if (isDevPackage) {
+      this.logger.debug('Skipping bpDependencies update for dev integration')
+      packageName = foundPackage.packageName
+    } else {
+      packageName = await this._addDependencyToPackage(ref, foundPackage.packageName, targetPackage)
+    }
+    await this._addSinglePackage(ref, { packageName, targetPackage })
+  }
+
+  private async _findPackage(ref: RefWithAlias): Promise<{ packageName: string; targetPackage: InstallablePackage }> {
+    const targetPackage = ref.type === 'path' ? await this._findLocalPackage(ref) : await this._findRemotePackage(ref)
+    if (!targetPackage) {
+      const strRef = pkgRef.formatPackageRef(ref)
+      throw new errors.BotpressCLIError(`Could not find package "${strRef}"`)
+    }
+    const packageName = ref.alias ?? targetPackage.pkg.name
+
+    return { packageName, targetPackage }
+  }
 
   private async _findRemotePackage(ref: pkgRef.ApiPackageRef): Promise<InstallablePackage | undefined> {
     const api = await this.ensureLoginAndCreateClient(this.argv)
     if (this._pkgCouldBe(ref, 'integration')) {
-      const integration = await api.findIntegration(ref)
+      const integration = await api.findPublicOrPrivateIntegration(ref)
       if (integration) {
         const { name, version } = integration
         return { type: 'integration', pkg: { integration, name, version } }
       }
     }
     if (this._pkgCouldBe(ref, 'interface')) {
-      const intrface = await api.findPublicInterface(ref)
+      const intrface = await api.findPublicOrPrivateInterface(ref)
       if (intrface) {
         const { name, version } = intrface
         return { type: 'interface', pkg: { interface: intrface, name, version } }
       }
     }
     if (this._pkgCouldBe(ref, 'plugin')) {
-      const plugin = await api.findPublicPlugin(ref)
+      const plugin = await api.findPublicOrPrivatePlugin(ref)
       if (plugin) {
-        const { code } = await api.client.getPluginCode({ id: plugin.id, platform: 'node' })
+        const { code } = plugin.public
+          ? await api.client.getPublicPluginCode({ id: plugin.id, platform: 'node' })
+          : await api.client.getPluginCode({ id: plugin.id, platform: 'node' })
         const { name, version } = plugin
         return {
           type: 'plugin',
@@ -211,10 +272,11 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
         )
       }
 
-      const { name, version } = projectDefinition.definition
+      const pluginDefinition = projectDefinition.definition
+      const { name, version } = pluginDefinition
       const code = projectImplementation
 
-      const createPluginReqBody = await apiUtils.prepareCreatePluginBody(projectDefinition.definition)
+      const createPluginReqBody = await apiUtils.prepareCreatePluginBody(pluginDefinition)
       return {
         type: 'plugin',
         pkg: {
@@ -225,19 +287,10 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
           plugin: {
             ...createPluginReqBody,
             dependencies: {
-              interfaces: await utils.promises.awaitRecord(
-                utils.records.mapValues(
-                  projectDefinition.definition.interfaces ?? {},
-                  apiUtils.prepareCreateInterfaceBody
-                )
-              ),
-              integrations: await utils.promises.awaitRecord(
-                utils.records.mapValues(
-                  projectDefinition.definition.integrations ?? {},
-                  apiUtils.prepareCreateIntegrationBody
-                )
-              ),
+              interfaces: pluginDefinition.interfaces,
+              integrations: pluginDefinition.integrations,
             },
+            recurringEvents: pluginDefinition.recurringEvents,
           },
         },
       }
@@ -276,14 +329,19 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
   }> {
     const cmd = this._getProjectCmd(workDir)
 
-    const definition = await cmd.readProjectDefinitionFromFS().catch((thrown) => {
+    const { resolveProjectDefinition } = cmd.readProjectDefinitionFromFS()
+    const definition = await resolveProjectDefinition().catch((thrown) => {
       if (thrown instanceof errors.ProjectDefinitionNotFoundError) {
         return undefined
       }
       throw thrown
     })
 
-    const devId = await cmd.projectCache.get('devId')
+    const devId = await cmd.projectCache.get('devId').catch((thrown) => {
+      const err = errors.BotpressCLIError.wrap(thrown, 'Failed to read project dev ID from cache')
+      this.logger.debug(err.message)
+      return undefined
+    })
 
     const implementationAbsPath = utils.path.join(workDir, consts.fromWorkDir.outFileCJS)
     if (!fslib.existsSync(implementationAbsPath)) {
@@ -311,6 +369,66 @@ export class AddCommand extends GlobalCommand<AddCommandDefinition> {
       workDir,
     })
   }
+
+  private async _addDependencyToPackage(
+    ref: RefWithAlias,
+    packageName: string,
+    targetPackage: InstallablePackage
+  ): Promise<string> {
+    const pkgJson = await utils.pkgJson.readPackageJson(this.argv.installPath).catch((thrown) => {
+      throw errors.BotpressCLIError.wrap(thrown, 'Failed to read package.json file')
+    })
+
+    if (!pkgJson) {
+      this.logger.warn('No package.json found in the install path')
+      return packageName
+    }
+
+    const version =
+      ref.type === 'path'
+        ? utils.path.relativePathFrom(
+            utils.path.absoluteFrom(utils.path.cwd(), this.argv.installPath),
+            utils.path.absoluteFrom(utils.path.cwd(), ref.path)
+          )
+        : `${targetPackage.type}:${targetPackage.pkg.name}@${targetPackage.pkg.version}`
+    const { bpDependencies } = pkgJson
+    if (!bpDependencies) {
+      pkgJson.bpDependencies = { [packageName]: version }
+      await utils.pkgJson.writePackageJson(this.argv.installPath, pkgJson)
+      return packageName
+    }
+
+    const bpDependenciesSchema = sdk.z.record(sdk.z.string())
+    const parseResult = bpDependenciesSchema.safeParse(bpDependencies)
+    if (!parseResult.success) {
+      throw new errors.BotpressCLIError('Invalid bpDependencies found in package.json')
+    }
+
+    const { data: validatedBpDeps } = parseResult
+
+    const alreadyPresentDep = Object.entries(validatedBpDeps).find(([key]) => key === packageName)
+    if (alreadyPresentDep) {
+      const alreadyPresentVersion = alreadyPresentDep[1]
+      if (alreadyPresentVersion !== version) {
+        this.logger.warn(
+          `The dependency with alias ${packageName} is already present in the bpDependencies of package.json, but with version ${alreadyPresentVersion}.`
+        )
+        const res = await this.prompt.confirm(`Do you want to overwrite the dependency with version ${version}?`)
+        if (!res) {
+          const newAlias = await this._chooseNewAlias(validatedBpDeps)
+          packageName = newAlias
+        }
+      }
+    }
+
+    pkgJson.bpDependencies = {
+      ...validatedBpDeps,
+      [packageName]: version,
+    }
+
+    await utils.pkgJson.writePackageJson(this.argv.installPath, pkgJson)
+    return packageName
+  }
 }
 
 // this is a hack to avoid refactoring the project command class
@@ -319,7 +437,7 @@ class _AnyProjectCommand extends ProjectCommand<ProjectCommandDefinition> {
     throw new errors.BotpressCLIError('Not implemented')
   }
 
-  public async readProjectDefinitionFromFS(): Promise<ProjectDefinition> {
+  public readProjectDefinitionFromFS(): ProjectDefinitionLazy {
     return super.readProjectDefinitionFromFS()
   }
 

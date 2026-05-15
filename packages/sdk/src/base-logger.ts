@@ -1,6 +1,18 @@
 import util from 'util'
 
-type LogLevel = 'info' | 'debug' | 'warn' | 'error'
+export type LogLevel = 'info' | 'debug' | 'warn' | 'error'
+
+export type IssueLogEvent = {
+  type: 'issue'
+  code: string
+  category: 'user_code' | 'limits' | 'configuration' | 'other'
+  title: string
+  description: string
+  data: Record<string, { raw: string; pretty?: string }>
+  /** This groups by data fields */
+  groupBy: string[]
+  traceId?: string
+}
 
 export abstract class BaseLogger<TOptions extends object> {
   protected defaultOptions: TOptions
@@ -27,24 +39,28 @@ export abstract class BaseLogger<TOptions extends object> {
     this._log('error', args)
   }
 
-  private _log(level: LogLevel, args: Parameters<typeof console.info>) {
-    this._getConsoleMethod(level)(this._serializeMessage(args))
+  public issue(args: IssueLogEvent) {
+    console.info(JSON.stringify(args))
   }
 
-  private _serializeMessage(args: Parameters<typeof console.info>) {
+  private _log(level: LogLevel, args: Parameters<typeof console.info>) {
+    this._getConsoleMethod(level)(this._serializeMessage(level, args))
+  }
+
+  private _serializeMessage(level: LogLevel, args: Parameters<typeof console.info>) {
     const msg = util.format(...args)
     if (process.env['BP_LOG_FORMAT'] === 'json') {
-      return this.getJsonMessage(msg)
+      return this.getJsonMessage(level, msg)
     } else {
       return msg
     }
   }
 
-  protected getJsonMessage(msg: string) {
-    return JSON.stringify({ msg, options: this.defaultOptions })
+  protected getJsonMessage(level: LogLevel, msg: string) {
+    return JSON.stringify({ msg, level, options: this.defaultOptions })
   }
 
-  private _getConsoleMethod(level: LogLevel): (...args: any[]) => void {
+  private _getConsoleMethod(level: LogLevel): (...args: unknown[]) => void {
     switch (level) {
       case 'debug':
         return console.debug

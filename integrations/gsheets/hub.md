@@ -3,6 +3,41 @@ From tracking inventory and managing project tasks to organizing event attendees
 Give your bot new abilities like add new entries, update existing records, and retrieve essential information.
 Stay agile and organized by dynamically adding new sheets to accommodate evolving data needs, ensuring your spreadsheets remain flexible and scalable.
 
+## Important note
+
+Unfortunately, **automatic configuration is temporarily unavailable**.
+We are currently in the process of getting our Google Sheets integration verified by Google. Once this verification is complete, you will be able to use the automatic configuration method to set up the Google Sheets integration with just a few clicks. Until then, you will need to create your own Google Cloud Platform (GCP) Service Account by following the steps outlined in the `Manual configuration using a service account` section below.
+
+## Migrating from 1.x.x to 2.x.x
+
+Version `2.0.0` of the Google Sheets integration introduces changes to the _Append Values_ action. If you are migrating from a previous version to `2.0.0`, please note the following changes:
+
+### Changes to the Append Values action
+
+- The `range` parameter has been replaced with two separate parameters: `sheetName` (optional) and `startColumn` (required).
+  - **Before**: The action accepted a single `range` parameter in A1 notation (e.g., `"Sheet1!A1:B2"`).
+  - **After**: The action now accepts `sheetName` (e.g., `"Sheet1"`) and `startColumn` (e.g., `"A"`) as separate parameters.
+- The range is now automatically constructed from the start column to row 100,000. The action will search for existing data in this range to find the table and append values after the last row.
+
+- **Migration guide**: If you were using the old format with a range like `"Sheet1!A1:B2"`, you should now use:
+
+  ```json
+  {
+    "sheetName": "Sheet1",
+    "startColumn": "A",
+    "values": [["value1", "value2"]]
+  }
+  ```
+
+  If you were using a range without a sheet name like `"A1:B2"`, you can now use:
+
+  ```json
+  {
+    "startColumn": "A",
+    "values": [["value1", "value2"]]
+  }
+  ```
+
 ## Configuration
 
 ### Automatic configuration with OAuth
@@ -21,14 +56,66 @@ Once the connection is established, you must specify the identifier of the Googl
 
 ### Manual configuration using a service account
 
-1. Login to Google Cloud Console and create a new project.
-2. Enable Google Sheets API for the project.
-3. Create a service account for the project. This integration won't work with any other type of credentials.
-4. Download the JSON credentials file and save it somewhere safe.
-5. The downloaded JSON file contains a `client_email` field. Share your spreadsheet with this email address to give it access.
-6. Install this integration in your bot with the following configuration:
+#### Creating a Google Cloud Platform project
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project by clicking the `Select a resource` dropdown in the top navigation bar and selecting `New Project`.
+3. Follow the on-screen instructions to create the new project.
+
+#### Enabling the Google Sheets API
+
+1. In the Google Cloud Console, navigate to the `APIs & Services` section.
+2. Click on `Library` in the left sidebar.
+3. Search for `Google Sheets API` and click on the result.
+4. Click the `Enable` button to enable the Google Sheets API for your project.
+
+#### Creating a service account
+
+1. In the Google Cloud Console, navigate to the `IAM & Admin` section.
+2. Click on `Service Accounts` in the left sidebar.
+3. Click the `Create service account` button.
+4. Enter a name for the service account. This should automatically fill the `Service account ID` field.
+5. Click `Done` to proceed. There is no need to grant any roles or permissions at this stage.
+
+#### Downloading the service account credentials file
+
+1. In the Google Cloud Console, navigate to the `IAM & Admin` section.
+2. Click on `Service Accounts` in the left sidebar.
+3. Select the service account you created previously.
+4. Click on the `Keys` tab.
+5. Click the `Add Key` button and select `JSON`.
+6. A JSON file containing the service account credentials will be downloaded to your computer. Save this file in a secure location, as it contains sensitive information. You will need this file to configure the Google Sheets integration in Botpress.
+
+#### Locating your service account email and private key
+
+1. Open the downloaded JSON file in a text editor.
+2. Look for the `client_email` field. This is the email address of the service account you created. Copy the email address, excluding the quotation marks. You will need this email address to share your spreadsheet with the service account and to configure the integration in Botpress.
+3. Look for the `private_key` field. This is the private key associated with the service account. Copy the private key, excluding the quotation marks. You will need this private key to configure the integration in Botpress.
+   > This public key begins with `-----BEGIN PRIVATE KEY-----\n` and ends with `\n-----END PRIVATE KEY-----\n`. You must copy the entire key: everything that is between the quotation marks.
+
+#### Sharing your spreadsheet with the service account
+
+1. Open Google Sheets in your web browser.
+2. Find the spreadsheet you want to access on Botpress and open it.
+3. Click on the `Share` button in the top right corner of the screen.
+4. In the dialog window, enter the service account email address you copied earlier in the `Add people` field.
+5. Give the `Editor` permission to the service account by selecting it from the dropdown menu.
+6. Click the `Send` button to share the spreadsheet with the service account.
+
+> **Please note:** your organization may have restrictions on sharing spreadsheets with external users. If you are unable to share the spreadsheet with the service account email address, you may need to use a different account or ask your organization's administrator for help.
+
+#### Locating your spreadsheet ID
+
+1. Open Google Sheets in your web browser.
+2. Find the spreadsheet you want to access on Botpress and open it.
+3. In the URL of the spreadsheet, you will find the _Spreadsheet ID_. You will need this ID to configure your integration on Botpress. The ID is the long string of characters between `/spreadsheets/d/` and `/edit` in the URL.
+   - For example, if the URL is `https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j/edit`, the ID is `1a2b3c4d5e6f7g8h9i0j`.
+   - Copy **only** the ID part of the URL, excluding the `/spreadsheets/d/` and `/edit` parts.
+
+#### Configuring the Google Sheets integration in Botpress
+
+1. Install this integration in your bot with the following configuration:
    - **Spreadsheet ID**: The ID of the Google Spreadsheet to interact with. When editing a spreadsheet, the ID is the long string of characters in the URL between `/spreadsheets/d/` and `/edit`.
-     - For example, if the URL is `https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j/edit`, the ID is `1a2b3c4d5e6f7g8h9i0j`.
    - **Service account private key**: The private key from the Google service account. You can get it from the downloaded JSON file.
    - **Service account email**: The client email from the Google service account. You can get it from the downloaded JSON file.
 
@@ -138,7 +225,7 @@ For example, if you want to update the range `Sheet1!A3:A6` with the values `1`,
 
 To insert a new row of data at the end of a table, you can use the _Append Values_ action. This action appends a new row of data after all other rows of data.
 
-To use this action, you must specify the range of one of the rows in the table. This could be the header row or any other row of the table. The action will then find the last row of the table and append the new data after it.
+To use this action, you must specify the start column of the table. The action will search for existing data in that column and find the last row of the table, then append the new data after it.
 
 For example, if you have a table with the following data in a sheet called `Sheet1`:
 
@@ -152,7 +239,8 @@ To append a new row with the data `Mike`, `35`, `SF`, you could use the followin
 
 ```json
 {
-  "range": "Sheet1!A1:C1",
+  "sheetName": "Sheet1",
+  "startColumn": "A",
   "majorDimension": "ROWS",
   "values": [["Mike", "35", "SF"]]
 }
@@ -162,7 +250,8 @@ You can insert multiple rows at once by providing multiple rows of data in the `
 
 ```json
 {
-  "range": "Sheet1!A1:C1",
+  "sheetName": "Sheet1",
+  "startColumn": "A",
   "majorDimension": "ROWS",
   "values": [
     ["Mike", "35", "SF"],
@@ -187,7 +276,8 @@ To append a new column with the data `Mike`, `35`, `SF`, you could use the follo
 
 ```json
 {
-  "range": "Sheet1!A1:A3",
+  "sheetName": "Sheet1",
+  "startColumn": "A",
   "majorDimension": "COLUMNS",
   "values": [["Mike", "35", "SF"]]
 }
@@ -232,7 +322,7 @@ The values will be returned in the following format:
 
 #### Updating values in a cell range
 
-To change values instead of appending new ones, you can use the _Update Values_ action. This action updates the values in the specified range in the Google Spreadsheet.
+To change values instead of appending new ones, you can use the _Set Values_ action. This action sets the values in the specified range in the Google Spreadsheet.
 
 For example, if you have the following data in a sheet called `Sheet1`:
 

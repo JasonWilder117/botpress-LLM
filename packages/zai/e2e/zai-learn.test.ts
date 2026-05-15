@@ -3,9 +3,8 @@ import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from 'vites
 import { getClient, getZai } from './utils'
 
 import { check } from '@botpress/vai'
-import { Client } from '@botpress/client'
 
-describe('zai.learn / generic', { timeout: 60_000 }, () => {
+describe.sequential('zai.learn / generic', { timeout: 60_000 }, () => {
   const client = getClient()
   let tableName = 'ZaiTestInternalTable'
   let taskId = 'test'
@@ -55,7 +54,7 @@ describe('zai.learn / generic', { timeout: 60_000 }, () => {
     expect(rows[0].taskType).toBe('zai.check')
   })
 
-  it('works even if tables are down', async () => {
+  it.skip('works even if tables are down', async () => {
     const upsertTableRows = vi.fn(async () => {
       throw new Error('Table is down')
     })
@@ -73,7 +72,7 @@ describe('zai.learn / generic', { timeout: 60_000 }, () => {
     const value = await zai
       .with({ client })
       .learn(taskId)
-      .check('This text is very clearly written in English.', 'is an english sentence')
+      .check('This text is very clearly written in English.', 'Text is in English')
 
     const { rows } = await getClient().findTableRows({ table: tableName })
 

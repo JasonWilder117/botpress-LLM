@@ -307,3 +307,48 @@ test('deep partial should make all properties optional', () => {
     ]
   >
 })
+
+test('IsStricterFunction and function extension', () => {
+  type Foo = { foo: string }
+  type FooPrime = Foo & { metadata: object }
+
+  type Bar = { bar: number }
+  type BarPrime = Bar & { metadata: object }
+
+  type A = (a: Foo) => Bar
+  type B = (a: FooPrime) => Bar
+  type C = (a: Foo) => BarPrime
+
+  type _assertion = utils.AssertAll<
+    [
+      //
+      utils.IsExtend<A, B>,
+      utils.IsExtend<C, A>,
+      utils.Not<utils.IsExtend<B, A>>,
+      utils.IsStricterFunction<B, A>,
+    ]
+  >
+})
+
+test('Normalize Function should not change function type', () => {
+  type MyFunc = (a: string, b: number) => Promise<{ c: boolean }>
+
+  type Expected = MyFunc
+  type Actual = utils.Normalize<MyFunc>
+
+  type _assertion = utils.AssertTrue<utils.IsIdentical<Actual, Expected>>
+})
+
+describe.concurrent('DistributivePick<T, K>', () => {
+  test('should pick properties distributively over union types', () => {
+    // Arrange
+    type A = { a: 1; b: 2; c: 'a' } | { a: 3; b: 4; c: 'b' }
+    type Expected = { a: 1; b: 2 } | { a: 3; b: 4 }
+
+    // Act
+    type B = utils.DistributivePick<A, 'a' | 'b'>
+
+    // Assert
+    type _assertion = utils.AssertTrue<utils.IsIdentical<B, Expected>>
+  })
+})

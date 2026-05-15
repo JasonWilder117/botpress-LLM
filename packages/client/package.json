@@ -1,11 +1,14 @@
 {
   "name": "@botpress/client",
-  "version": "0.48.0",
+  "version": "1.45.0",
   "description": "Botpress Client",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "license": "MIT",
+  "repository": {
+    "url": "https://github.com/botpress/botpress"
+  },
   "browser": {
     "crypto": false,
     "http": false,
@@ -28,14 +31,13 @@
     "qs": "^6.11.0"
   },
   "devDependencies": {
-    "@botpress/api": "0.79.0",
     "@types/qs": "^6.9.7",
-    "esbuild": "^0.16.12",
+    "esbuild": "^0.25.10",
     "lodash": "^4.17.21",
     "tsup": "^8.0.2"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "packageManager": "pnpm@8.6.2"
+  "packageManager": "pnpm@10.12.4"
 }

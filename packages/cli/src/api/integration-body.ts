@@ -4,7 +4,7 @@ import * as utils from '../utils'
 import * as types from './types'
 
 export const prepareCreateIntegrationBody = async (
-  integration: sdk.IntegrationDefinition | sdk.IntegrationPackage['definition']
+  integration: sdk.IntegrationDefinition
 ): Promise<types.CreateIntegrationRequestBody> => ({
   name: integration.name,
   version: integration.version,
@@ -14,7 +14,10 @@ export const prepareCreateIntegrationBody = async (
   events: integration.events
     ? await utils.records.mapValuesAsync(integration.events, async (event) => ({
         ...event,
-        schema: await utils.schema.mapZodToJsonSchema(event),
+        schema: await utils.schema.mapZodToJsonSchema(event, {
+          useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+          toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+        }),
       }))
     : undefined,
   actions: integration.actions
@@ -22,11 +25,17 @@ export const prepareCreateIntegrationBody = async (
         ...action,
         input: {
           ...action.input,
-          schema: await utils.schema.mapZodToJsonSchema(action.input),
+          schema: await utils.schema.mapZodToJsonSchema(action.input, {
+            useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+          }),
         },
         output: {
           ...action.output,
-          schema: await utils.schema.mapZodToJsonSchema(action.output),
+          schema: await utils.schema.mapZodToJsonSchema(action.output, {
+            useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+          }),
         },
       }))
     : undefined,
@@ -35,22 +44,33 @@ export const prepareCreateIntegrationBody = async (
         ...channel,
         messages: await utils.records.mapValuesAsync(channel.messages, async (message) => ({
           ...message,
-          schema: await utils.schema.mapZodToJsonSchema(message),
+          schema: await utils.schema.mapZodToJsonSchema(message, {
+            useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+          }),
         })),
       }))
     : undefined,
   states: integration.states
     ? await utils.records.mapValuesAsync(integration.states, async (state) => ({
         ...state,
-        schema: await utils.schema.mapZodToJsonSchema(state),
+        schema: await utils.schema.mapZodToJsonSchema(state, {
+          useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+          toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+        }),
       }))
     : undefined,
   entities: integration.entities
     ? await utils.records.mapValuesAsync(integration.entities, async (entity) => ({
         ...entity,
-        schema: await utils.schema.mapZodToJsonSchema(entity),
+        schema: await utils.schema.mapZodToJsonSchema(entity, {
+          useLegacyZuiTransformer: integration.__advanced?.useLegacyZuiTransformer,
+          toJSONSchemaOptions: integration.__advanced?.toJSONSchemaOptions,
+        }),
       }))
     : undefined,
+  attributes: integration.attributes,
+  extraOperations: '__advanced' in integration ? integration.__advanced?.extraOperations : undefined,
 })
 
 type UpdateIntegrationChannelsBody = NonNullable<types.UpdateIntegrationRequestBody['channels']>
@@ -61,8 +81,14 @@ export const prepareUpdateIntegrationBody = (
   localIntegration: types.UpdateIntegrationRequestBody,
   remoteIntegration: client.Integration
 ): types.UpdateIntegrationRequestBody => {
-  const actions = utils.records.setNullOnMissingValues(localIntegration.actions, remoteIntegration.actions)
-  const events = utils.records.setNullOnMissingValues(localIntegration.events, remoteIntegration.events)
+  const actions = utils.attributes.prepareAttributeUpdateBody({
+    localItems: utils.records.setNullOnMissingValues(localIntegration.actions, remoteIntegration.actions),
+    remoteItems: remoteIntegration.actions,
+  })
+  const events = utils.attributes.prepareAttributeUpdateBody({
+    localItems: utils.records.setNullOnMissingValues(localIntegration.events, remoteIntegration.events),
+    remoteItems: remoteIntegration.events,
+  })
   const states = utils.records.setNullOnMissingValues(localIntegration.states, remoteIntegration.states)
   const entities = utils.records.setNullOnMissingValues(localIntegration.entities, remoteIntegration.entities)
   const user = {
@@ -79,6 +105,12 @@ export const prepareUpdateIntegrationBody = (
     remoteIntegration.configurations
   )
 
+  const readme = localIntegration.readme
+  const icon = localIntegration.icon
+
+  const attributes = utils.records.setNullOnMissingValues(localIntegration.attributes, remoteIntegration.attributes)
+
+  const extraOperations = localIntegration.extraOperations
   return {
     ..._maybeRemoveVrlScripts(localIntegration, remoteIntegration),
     actions,
@@ -89,6 +121,10 @@ export const prepareUpdateIntegrationBody = (
     channels,
     interfaces,
     configurations,
+    readme,
+    icon,
+    attributes,
+    extraOperations,
   }
 }
 

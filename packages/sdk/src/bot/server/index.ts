@@ -1,12 +1,10 @@
-import * as client from '@botpress/client'
-import { log } from '../../log'
+import { isApiError, Client, RuntimeError, Message, State, User, Conversation } from '@botpress/client'
 import { retryConfig } from '../../retry'
 import { Request, Response, parseBody } from '../../serve'
 import * as utils from '../../utils/type-utils'
 import { BotLogger } from '../bot-logger'
 import { BotSpecificClient } from '../client'
 import * as common from '../common'
-import { proxyWorkflows } from '../workflow-proxy'
 import { extractContext } from './context'
 import { SUCCESS_RESPONSE } from './responses'
 import * as types from './types'
@@ -20,7 +18,7 @@ export const botHandler =
     const ctx = extractContext(req.headers)
     const logger = new BotLogger()
 
-    const vanillaClient = new client.Client({
+    const vanillaClient = new Client({
       botId: ctx.botId,
       retry: retryConfig,
     })
@@ -33,9 +31,8 @@ export const botHandler =
             const hookOutput = await handler({
               client,
               ctx,
-              logger,
+              logger: logger.with({ conversationId: req.conversationId, userId: req.userId }),
               data: req,
-              ..._getBotTools({ client }),
             })
             req = hookOutput?.data ?? req
           }
@@ -50,7 +47,6 @@ export const botHandler =
               ctx,
               logger,
               data: req,
-              ..._getBotTools({ client }),
             })
             req = hookOutput?.data ?? req
           }
@@ -65,24 +61,30 @@ export const botHandler =
             const hookOutput = await handler({
               client,
               ctx,
-              logger,
+              logger: logger.with({
+                messageId: res.message.id,
+                conversationId: res.message.conversationId,
+                userId: res.message.userId,
+              }),
               data: res,
-              ..._getBotTools({ client }),
             })
             res = hookOutput?.data ?? res
           }
           return res
         },
-        callAction: async (res) => {
-          const afterOutgoingCallActionHooks = bot.hookHandlers.after_outgoing_call_action[res.output.type] ?? []
+        callAction: async (res, req) => {
+          const { type } = req
+          const afterOutgoingCallActionHooks = bot.hookHandlers.after_outgoing_call_action[type] ?? []
           for (const handler of afterOutgoingCallActionHooks) {
             const client = new BotSpecificClient(vanillaClient)
             const hookOutput = await handler({
               client,
               ctx,
               logger,
-              data: res,
-              ..._getBotTools({ client }),
+              data: {
+                type,
+                ...res,
+              },
             })
             res = hookOutput?.data ?? res
           }
@@ -99,39 +101,68 @@ export const botHandler =
       self: bot,
     }
 
-    switch (ctx.operation) {
-      case 'action_triggered':
-        return await onActionTriggered(props)
-      case 'event_received':
-        return await onEventReceived(props)
-      case 'register':
-        return await onRegister(props)
-      case 'unregister':
-        return await onUnregister(props)
-      case 'ping':
-        return await onPing(props)
-      default:
-        throw new Error(`Unknown operation ${ctx.operation}`)
+    try {
+      switch (ctx.operation) {
+        case 'action_triggered':
+          return await onActionTriggered(props)
+        case 'event_received':
+          return await onEventReceived(props)
+        case 'register':
+          return await onRegister(props)
+        case 'unregister':
+          return await onUnregister(props)
+        case 'ping':
+          return await onPing(props)
+        default:
+          throw new Error(`Unknown operation ${ctx.operation}`)
+      }
+    } catch (thrown: unknown) {
+      const error = thrown instanceof Error ? thrown : new Error(String(thrown))
+
+      if (isApiError(error)) {
+        const runtimeError = error.type === 'Runtime' ? error : new RuntimeError(error.message, error)
+        logger.error(runtimeError.message)
+
+        return { status: runtimeError.code, body: JSON.stringify(runtimeError.toJSON()) }
+      }
+
+      const runtimeError = new RuntimeError('An unexpected error occurred in the bot.', error)
+      logger.error(runtimeError.message, error)
+      return { status: runtimeError.code, body: JSON.stringify(runtimeError.toJSON()) }
     }
   }
 
-const onPing = async ({ ctx }: types.ServerProps): Promise<Response> => {
-  log.info(`Received ${ctx.operation} operation for bot ${ctx.botId} of type ${ctx.type}`)
+const onPing = async (_: types.ServerProps): Promise<Response> => {
   return SUCCESS_RESPONSE
 }
 
-const onRegister = async (_: types.ServerProps): Promise<Response> => SUCCESS_RESPONSE
+const onRegister = async (serverProps: types.ServerProps): Promise<Response> => {
+  await serverProps.self.registerHandler?.({
+    client: serverProps.client,
+    ctx: serverProps.ctx,
+    logger: serverProps.logger,
+  })
+  return SUCCESS_RESPONSE
+}
 
-const onUnregister = async (_: types.ServerProps): Promise<Response> => SUCCESS_RESPONSE
+const onUnregister = async (_: types.ServerProps): Promise<Response> => {
+  // this is currently never called
+  return SUCCESS_RESPONSE
+}
 
 const onEventReceived = async (serverProps: types.ServerProps): Promise<Response> => {
   const { ctx, logger, req, client, self } = serverProps
-  const common: types.CommonHandlerProps<common.BaseBot> = { client, ctx, logger, ..._getBotTools({ client }) }
-
-  log.debug(`Received event ${ctx.type}`)
+  const common: types.CommonHandlerProps<common.BaseBot> = { client, ctx, logger }
 
   type AnyEventPayload = utils.ValueOf<types.EventPayloads<common.BaseBot>>
   const body = parseBody<AnyEventPayload>(req)
+
+  common.logger = common.logger.with({
+    eventId: body.event.id,
+    messageId: body.event.messageId,
+    conversationId: body.event.conversationId,
+    userId: body.event.userId,
+  })
 
   if (ctx.type === 'workflow_update') {
     return await handleWorkflowUpdateEvent(serverProps, body.event as types.WorkflowUpdateEvent)
@@ -139,11 +170,22 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
 
   if (ctx.type === 'message_created') {
     const event = body.event
-    let message: client.Message = event.payload.message
+    let message: Message = event.payload.message
+    const user: User = event.payload.user
+    const conversation: Conversation = event.payload.conversation
+
+    common.logger = common.logger.with({
+      messageId: message.id,
+      conversationId: message.conversationId,
+      userId: message.userId,
+    })
+
     const beforeIncomingMessageHooks = self.hookHandlers.before_incoming_message[message.type] ?? []
     for (const handler of beforeIncomingMessageHooks) {
       const hookOutput = await handler({
         ...common,
+        user,
+        conversation,
         data: message,
       })
       message = hookOutput?.data ?? message
@@ -152,11 +194,10 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
       }
     }
 
-    const messagePayload: utils.ValueOf<types.MessagePayloads<common.BaseBot>> = {
+    const messagePayload: Parameters<(typeof messageHandlers)[number]>[0] = {
       ...common,
-      user: event.payload.user,
-      conversation: event.payload.conversation,
-      states: event.payload.states,
+      user,
+      conversation,
       message,
       event,
     }
@@ -169,6 +210,8 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
     for (const handler of afterIncomingMessageHooks) {
       const hookOutput = await handler({
         ...common,
+        user,
+        conversation,
         data: message,
       })
       message = hookOutput?.data ?? message
@@ -182,10 +225,13 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
 
   if (ctx.type === 'state_expired') {
     const event = body.event
-    const state: client.State = event.payload.state
-    const statePayload: utils.ValueOf<types.StateExpiredPayloads<common.BaseBot>> = { ...common, state }
+    const state: State = event.payload.state
+    const statePayload: Parameters<(typeof stateHandlers)[number]>[0] = {
+      ...common,
+      state: state as types.IncomingStates<common.BaseBot>[string],
+    }
 
-    const stateHandlers = self.stateExpiredHandlers['*'] ?? []
+    const stateHandlers = self.stateExpiredHandlers[state.name] ?? []
     for (const handler of stateHandlers) {
       await handler(statePayload)
     }
@@ -206,7 +252,7 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
     }
   }
 
-  const eventPayload: utils.ValueOf<types.EventPayloads<common.BaseBot>> = { ...common, event }
+  const eventPayload: Parameters<(typeof eventHandlers)[number]>[0] = { ...common, event }
   const eventHandlers = self.eventHandlers[event.type] ?? []
   for (const handler of eventHandlers) {
     await handler(eventPayload)
@@ -229,19 +275,49 @@ const onEventReceived = async (serverProps: types.ServerProps): Promise<Response
 
 const onActionTriggered = async ({ ctx, logger, req, client, self }: types.ServerProps): Promise<Response> => {
   type AnyActionPayload = utils.ValueOf<types.ActionHandlerPayloads<common.BaseBot>>
-  const { input, type } = parseBody<AnyActionPayload>(req)
+  let { input, type } = parseBody<AnyActionPayload>(req)
 
   if (!type) {
     throw new Error('Missing action type')
   }
 
-  const action = self.actionHandlers[type]
+  // TODO: this should probably run even if the action is called in memory
+  const beforeIncomingCallActionHooks = self.hookHandlers.before_incoming_call_action[type] ?? []
+  for (const handler of beforeIncomingCallActionHooks) {
+    const hookOutput = await handler({
+      ctx,
+      logger,
+      client,
+      data: {
+        type,
+        input,
+      },
+    })
+    input = hookOutput?.data?.input ?? input
+    type = hookOutput?.data?.type ?? type
+  }
 
+  const action = self.actionHandlers[type]
   if (!action) {
     throw new Error(`Action ${type} not found`)
   }
 
-  const output = await action({ ctx, logger, input, client, type, ..._getBotTools({ client }) })
+  let output = await action({ ctx, logger, input, client, type })
+
+  const afterIncomingCallActionHooks = self.hookHandlers.after_incoming_call_action[type] ?? []
+  for (const handler of afterIncomingCallActionHooks) {
+    const hookOutput = await handler({
+      ctx,
+      logger,
+      client,
+      data: {
+        type,
+        output,
+      },
+    })
+    type = hookOutput?.data?.type ?? type
+    output = hookOutput?.data?.output ?? output
+  }
 
   const response = { output }
   return {
@@ -249,9 +325,3 @@ const onActionTriggered = async ({ ctx, logger, req, client, self }: types.Serve
     body: JSON.stringify(response),
   }
 }
-
-const _getBotTools = (
-  props: Pick<types.CommonHandlerProps<common.BaseBot>, 'client'>
-): Pick<types.CommonHandlerProps<common.BaseBot>, 'workflows'> => ({
-  workflows: proxyWorkflows(props.client),
-})

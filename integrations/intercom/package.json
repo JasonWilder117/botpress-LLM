@@ -5,7 +5,8 @@
   "scripts": {
     "build": "bp add -y && bp build",
     "check:type": "tsc --noEmit",
-    "check:bplint": "bp lint"
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
   },
   "dependencies": {
     "@botpress/cli": "workspace:*",
@@ -18,6 +19,11 @@
   "devDependencies": {
     "@botpress/cli": "workspace:*",
     "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
     "@sentry/cli": "^2.39.1"
+  },
+  "bpDependencies": {
+    "proactive-user": "../../interfaces/proactive-user",
+    "proactive-conversation": "../../interfaces/proactive-conversation"
   }
 }

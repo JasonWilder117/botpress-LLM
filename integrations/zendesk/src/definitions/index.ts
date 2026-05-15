@@ -8,8 +8,8 @@ export const events = {
     title: 'Article Published',
     description: 'Triggered when an article is published',
     schema: z.object({
-      articleId: z.string(),
-      articleTitle: z.string(),
+      articleId: z.string().title('Article ID').describe('The unique identifier of the published article'),
+      articleTitle: z.string().title('Article Title').describe('The title of the published article'),
     }),
     ui: {},
   },
@@ -17,39 +17,32 @@ export const events = {
     title: 'Article Unpublished',
     description: 'Triggered when an article is unpublished',
     schema: z.object({
-      articleId: z.string(),
+      articleId: z.string().title('Article ID').describe('The unique identifier of the unpublished article'),
     }),
     ui: {},
   },
 } satisfies IntegrationDefinitionProps['events']
 
 export const configuration = {
+  identifier: {
+    linkTemplateScript: 'linkTemplate.vrl',
+  },
   schema: z.object({
-    organizationSubdomain: z
-      .string({
-        description: 'Your zendesk organization subdomain. e.g. botpress7281',
-      })
-      .min(1),
-    email: z
-      .string({
-        description: 'Your zendesk account email. e.g. john.doe@botpress.com',
-      })
-      .email(),
-    apiToken: z
-      .string({
-        description: 'Zendesk API Token',
-      })
-      .min(1),
     syncKnowledgeBaseWithBot: z
-      .boolean({
-        description: 'Would you like to sync Zendesk Knowledge Base into Bot Knowledge Base?',
-      })
-      .optional(),
+      .boolean()
+      .optional()
+      .title('Sync Knowledge Base With Bot')
+      .describe('Would you like to sync Zendesk Knowledge Base into Bot Knowledge Base?'),
     knowledgeBaseId: z
-      .string({
-        description: 'ID of the Knowledge Base you wish to synchronize with your Zendesk KB',
-      })
-      .optional(),
+      .string()
+      .optional()
+      .title('Knowledge Base ID')
+      .describe('ID of the Knowledge Base you wish to synchronize with your Zendesk KB'),
+    ignoreNonHitlTickets: z
+      .boolean()
+      .optional()
+      .title('Ignore non-HITL tickets')
+      .describe('Ignore tickets that were not created by the startHitl action'),
   }),
 } satisfies IntegrationDefinitionProps['configuration']
 
@@ -57,16 +50,38 @@ export const states = {
   subscriptionInfo: {
     type: 'integration',
     schema: z.object({
-      subscriptionId: z.string(),
-      triggerIds: z.array(z.string()),
+      subscriptionId: z
+        .string()
+        .title('Subscription ID')
+        .describe('The unique identifier for the Zendesk webhook subscription'),
+      triggerIds: z
+        .array(z.string())
+        .title('Trigger IDs')
+        .describe('Array of trigger IDs associated with the subscription'),
+    }),
+  },
+  credentials: {
+    type: 'integration',
+    schema: z.object({
+      accessToken: z.string().optional().title('Access token').describe('The access token obtained by OAuth'),
+      subdomain: z.string().optional().title('Subdomain').describe('The bot subdomain'),
     }),
   },
 } satisfies IntegrationDefinitionProps['states']
 
 export const user = {
   tags: {
-    id: {},
-    email: {},
-    role: {},
+    id: {
+      title: 'User ID',
+      description: 'The unique identifier of the Zendesk user',
+    },
+    email: {
+      title: 'Email',
+      description: 'The email address of the Zendesk user',
+    },
+    role: {
+      title: 'Role',
+      description: 'The role of the Zendesk user (end-user, agent, or admin)',
+    },
   },
 } satisfies IntegrationDefinitionProps['user']

@@ -1,7 +1,7 @@
 import { Client } from '@botpress/client'
 import pathlib from 'path'
 import * as uuid from 'uuid'
-import impl from '../../src/command-implementations'
+import impl from '../../src'
 import { ApiIntegration, fetchAllIntegrations } from '../api'
 import defaults from '../defaults'
 import * as retry from '../retry'
@@ -14,7 +14,7 @@ const fetchIntegration = async (client: Client, integrationName: string): Promis
 }
 
 export const createDeployIntegration: Test = {
-  name: 'cli should allow creating, building, deploying and mannaging an integration',
+  name: 'cli should allow creating, building, deploying and managing an integration',
   handler: async ({ tmpDir, dependencies, workspaceHandle, logger, ...creds }) => {
     const botpressHomeDir = pathlib.join(tmpDir, '.botpresshome')
     const baseDir = pathlib.join(tmpDir, 'integrations')
@@ -57,7 +57,7 @@ export const createDeployIntegration: Test = {
     }
 
     logger.debug(`Deleting integration "${integrationName}"`)
-    await impl.integrations.subcommands.delete({ ...argv, integrationRef: integration.id }).then(utils.handleExitCode)
+    await impl.integrations.delete({ ...argv, integrationRef: integration.id }).then(utils.handleExitCode)
 
     if (await fetchIntegration(client, integrationName)) {
       throw new Error(`Integration ${integrationName} should have been deleted`)

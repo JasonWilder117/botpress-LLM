@@ -1,4 +1,5 @@
 import * as client from '@botpress/client'
+import type { commonTypes } from '../../common'
 import * as utils from '../../utils/type-utils'
 import * as common from '../common'
 import {
@@ -7,9 +8,7 @@ import {
   GetChannelByName,
   GetMessageByName,
   MessageTags,
-  WithOptionalPrefix,
-  WithRequiredPrefix,
-  TagsOfMessage,
+  UserTags,
 } from './sub-types'
 
 type Arg<F extends (...args: any[]) => any> = Parameters<F>[number]
@@ -18,21 +17,42 @@ type Res<F extends (...args: any[]) => any> = ReturnType<F>
 type ConversationResponse<
   TIntegration extends common.BaseIntegration,
   ChannelName extends keyof TIntegration['channels'] = keyof TIntegration['channels'],
-> = {
-  conversation: utils.Merge<
-    Awaited<Res<client.Client['getConversation']>>['conversation'],
+> = utils.ValueOf<{
+  [TChannelName in ChannelName]: {
+    conversation: utils.Merge<
+      Awaited<Res<client.Client['getConversation']>>['conversation'],
+      {
+        channel: TChannelName
+        tags: commonTypes.ToTags<keyof TIntegration['channels'][TChannelName]['conversation']['tags']>
+      }
+    >
+  }
+}>
+
+// TODO: rm dupplicated code with type above
+type GetOrCreateConversationResponse<
+  TIntegration extends common.BaseIntegration,
+  ChannelName extends keyof TIntegration['channels'] = keyof TIntegration['channels'],
+> = utils.ValueOf<{
+  [TChannelName in ChannelName]: utils.Merge<
+    Awaited<Res<client.Client['getOrCreateConversation']>>,
     {
-      channel: ChannelName
-      tags: common.ToTags<keyof TIntegration['channels'][ChannelName]['conversation']['tags']>
+      conversation: utils.Merge<
+        Awaited<Res<client.Client['getOrCreateConversation']>>['conversation'],
+        {
+          channel: TChannelName
+          tags: commonTypes.ToTags<keyof TIntegration['channels'][TChannelName]['conversation']['tags']>
+        }
+      >
     }
   >
-}
+}>
 
 export type CreateConversation<TIntegration extends common.BaseIntegration> = <
   ChannelName extends keyof TIntegration['channels'],
 >(x: {
   channel: utils.Cast<ChannelName, string>
-  tags: common.ToTags<keyof GetChannelByName<TIntegration, ChannelName>['conversation']['tags']>
+  tags: commonTypes.ToTags<keyof GetChannelByName<TIntegration, ChannelName>['conversation']['tags']>
 }) => Promise<ConversationResponse<TIntegration, ChannelName>>
 
 export type GetConversation<TIntegration extends common.BaseIntegration> = (
@@ -46,7 +66,7 @@ export type ListConversations<TIntegration extends common.BaseIntegration> = <
     Arg<client.Client['listConversations']>,
     {
       channel?: utils.Cast<ChannelName, string>
-      tags?: common.ToTags<keyof GetChannelByName<TIntegration, ChannelName>['conversation']['tags']>
+      tags?: commonTypes.ToTags<keyof GetChannelByName<TIntegration, ChannelName>['conversation']['tags']>
     }
   >
 ) => Res<client.Client['listConversations']> // TODO: response should contain the tags
@@ -59,17 +79,17 @@ export type GetOrCreateConversation<TIntegration extends common.BaseIntegration>
     Arg<client.Client['getOrCreateConversation']>,
     {
       channel: utils.Cast<ChannelName, string>
-      tags: common.ToTags<TTags>
+      tags: commonTypes.ToNullableTags<TTags>
       discriminateByTags?: NoInfer<utils.Cast<TTags[], string[]>>
     }
   >
-) => Promise<ConversationResponse<TIntegration, ChannelName>>
+) => Promise<GetOrCreateConversationResponse<TIntegration, ChannelName>>
 
 export type UpdateConversation<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['updateConversation']>,
     {
-      tags?: common.ToTags<ConversationTags<TIntegration>>
+      tags?: commonTypes.ToNullableTags<ConversationTags<TIntegration>>
     }
   >
 ) => Promise<ConversationResponse<TIntegration>>
@@ -85,7 +105,7 @@ type EventResponse<TIntegration extends common.BaseIntegration, TEvent extends k
   event: utils.Merge<
     Awaited<Res<client.Client['getEvent']>>['event'],
     {
-      type: WithRequiredPrefix<utils.Cast<TEvent, string>, TIntegration['name']>
+      type: utils.Cast<TEvent, string>
       payload: TIntegration['events'][TEvent]
     }
   >
@@ -95,7 +115,7 @@ export type CreateEvent<TIntegration extends common.BaseIntegration> = <TEvent e
   x: utils.Merge<
     Arg<client.Client['createEvent']>,
     {
-      type: WithOptionalPrefix<utils.Cast<TEvent, string>, TIntegration['name']>
+      type: utils.Cast<TEvent, string>
       payload: TIntegration['events'][TEvent]
     }
   >
@@ -111,7 +131,7 @@ export type ListEvents<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['listEvents']>,
     {
-      type?: WithRequiredPrefix<utils.Cast<keyof TIntegration['events'], string>, TIntegration['name']>
+      type?: utils.Cast<keyof TIntegration['events'], string>
     }
   >
 ) => Res<client.Client['listEvents']>
@@ -121,12 +141,8 @@ type MessageResponse<
   TMessage extends keyof EnumerateMessages<TIntegration> = keyof EnumerateMessages<TIntegration>,
 > = {
   message: utils.Merge<
-    Awaited<Res<client.Client['createMessage']>>['message'],
-    {
-      type: utils.Cast<TMessage, string>
-      payload: GetMessageByName<TIntegration, TMessage>['payload']
-      tags: common.ToTags<TagsOfMessage<TIntegration, TMessage>>
-    }
+    Awaited<Res<client.Client['getMessage']>>['message'],
+    utils.Cast<EnumerateMessages<TIntegration>[TMessage], object>
   >
 }
 
@@ -138,10 +154,23 @@ export type CreateMessage<TIntegration extends common.BaseIntegration> = <
     {
       type: utils.Cast<TMessage, string>
       payload: GetMessageByName<TIntegration, TMessage>['payload']
-      tags: common.ToTags<keyof GetMessageByName<TIntegration, TMessage>['tags']>
+      tags: commonTypes.ToTags<keyof GetMessageByName<TIntegration, TMessage>['tags']>
     }
   >
 ) => Promise<MessageResponse<TIntegration, TMessage>>
+
+type GetOrCreateMessageResponse<
+  TIntegration extends common.BaseIntegration,
+  TMessage extends keyof EnumerateMessages<TIntegration> = keyof EnumerateMessages<TIntegration>,
+> = utils.Merge<
+  Awaited<Res<client.Client['getOrCreateMessage']>>,
+  {
+    message: utils.Merge<
+      Awaited<Res<client.Client['getOrCreateMessage']>>['message'],
+      utils.Cast<EnumerateMessages<TIntegration>[TMessage], object>
+    >
+  }
+>
 
 export type GetOrCreateMessage<TIntegration extends common.BaseIntegration> = <
   TMessage extends keyof EnumerateMessages<TIntegration>,
@@ -151,13 +180,13 @@ export type GetOrCreateMessage<TIntegration extends common.BaseIntegration> = <
     Arg<client.Client['getOrCreateMessage']>,
     {
       type: utils.Cast<TMessage, string>
-      payload: GetMessageByName<TIntegration, TMessage>['payload']
-      tags: common.ToTags<TTags>
+      payload?: GetMessageByName<TIntegration, TMessage>['payload']
+      tags: commonTypes.ToNullableTags<TTags>
       // TODO: find a way to restrict discriminateByTags to tags present in x.tags
       discriminateByTags?: NoInfer<utils.Cast<TTags[], string[]>>
     }
   >
-) => Promise<MessageResponse<TIntegration, TMessage>>
+) => Promise<GetOrCreateMessageResponse<TIntegration, TMessage>>
 
 export type GetMessage<TIntegration extends common.BaseIntegration> = (
   x: Arg<client.Client['getMessage']>
@@ -167,7 +196,7 @@ export type UpdateMessage<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['updateMessage']>,
     {
-      tags: common.ToTags<MessageTags<TIntegration>>
+      tags?: commonTypes.ToNullableTags<MessageTags<TIntegration>>
     }
   >
 ) => Promise<MessageResponse<TIntegration>>
@@ -176,7 +205,7 @@ export type ListMessages<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['listMessages']>,
     {
-      tags?: common.ToTags<MessageTags<TIntegration>>
+      tags?: commonTypes.ToTags<MessageTags<TIntegration>>
     }
   >
 ) => Res<client.Client['listMessages']> // TODO: response should contain the tags
@@ -187,7 +216,7 @@ type UserResponse<TIntegration extends common.BaseIntegration> = {
   user: utils.Merge<
     Awaited<Res<client.Client['getUser']>>['user'],
     {
-      tags: common.ToTags<keyof TIntegration['user']['tags']>
+      tags: commonTypes.ToTags<UserTags<TIntegration>>
     }
   >
 }
@@ -196,7 +225,7 @@ export type CreateUser<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['createUser']>,
     {
-      tags: common.ToTags<keyof TIntegration['user']['tags']>
+      tags: commonTypes.ToTags<UserTags<TIntegration>>
     }
   >
 ) => Promise<UserResponse<TIntegration>>
@@ -209,10 +238,22 @@ export type ListUsers<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['listUsers']>,
     {
-      tags?: common.ToTags<keyof TIntegration['user']['tags']>
+      tags?: commonTypes.ToTags<UserTags<TIntegration>>
     }
   >
 ) => Res<client.Client['listUsers']>
+
+type GetOrCreateUserResponse<TIntegration extends common.BaseIntegration> = utils.Merge<
+  Awaited<Res<client.Client['getOrCreateUser']>>,
+  {
+    user: utils.Merge<
+      Awaited<Res<client.Client['getOrCreateUser']>>['user'],
+      {
+        tags: commonTypes.ToTags<UserTags<TIntegration>>
+      }
+    >
+  }
+>
 
 export type GetOrCreateUser<TIntegration extends common.BaseIntegration> = <
   TTags extends keyof TIntegration['user']['tags'],
@@ -220,28 +261,54 @@ export type GetOrCreateUser<TIntegration extends common.BaseIntegration> = <
   x: utils.Merge<
     Arg<client.Client['getOrCreateUser']>,
     {
-      tags: common.ToTags<TTags>
+      tags: commonTypes.ToNullableTags<TTags>
       discriminateByTags?: NoInfer<utils.Cast<TTags[], string[]>>
     }
   >
-) => Promise<UserResponse<TIntegration>>
+) => Promise<GetOrCreateUserResponse<TIntegration>>
 
 export type UpdateUser<TIntegration extends common.BaseIntegration> = (
   x: utils.Merge<
     Arg<client.Client['updateUser']>,
     {
-      tags?: common.ToTags<keyof TIntegration['user']['tags']>
+      tags?: commonTypes.ToNullableTags<UserTags<TIntegration>>
     }
   >
 ) => Promise<UserResponse<TIntegration>>
 
 export type DeleteUser<_TIntegration extends common.BaseIntegration> = client.Client['deleteUser']
 
+export type InitializeIncomingMessage<TIntegration extends common.BaseIntegration> = (
+  x: utils.Merge<
+    Arg<client.Client['initializeIncomingMessage']>,
+    {
+      user?: utils.Merge<
+        NonNullable<Arg<client.Client['initializeIncomingMessage']>['user']>,
+        { tags: commonTypes.ToTags<UserTags<TIntegration>> }
+      >
+      conversation?: utils.Merge<
+        NonNullable<Arg<client.Client['initializeIncomingMessage']>['conversation']>,
+        { tags: commonTypes.ToTags<ConversationTags<TIntegration>> }
+      >
+      message?: utils.Merge<
+        NonNullable<Arg<client.Client['initializeIncomingMessage']>['message']>,
+        { tags: commonTypes.ToTags<MessageTags<TIntegration>> }
+      >
+    }
+  >
+) => Promise<{
+  user: Awaited<Res<client.Client['getUser']>>['user']
+  conversation: Awaited<Res<client.Client['getConversation']>>['conversation']
+  message?: MessageResponse<TIntegration>
+}>
+
 type StateResponse<TIntegration extends common.BaseIntegration, TState extends keyof TIntegration['states']> = {
   state: utils.Merge<
     Awaited<Res<client.Client['getState']>>['state'],
     {
-      payload: TIntegration['states'][TState]
+      name: utils.Cast<TState, string>
+      type: utils.Cast<TIntegration['states'][TState]['type'], string>
+      payload: TIntegration['states'][TState]['payload']
     }
   >
   meta: {
@@ -253,6 +320,7 @@ export type GetState<TIntegration extends common.BaseIntegration> = <TState exte
   x: utils.Merge<
     Arg<client.Client['getState']>,
     {
+      type: utils.Cast<TIntegration['states'][TState]['type'], string>
       name: utils.Cast<TState, string>
     }
   >
@@ -263,7 +331,8 @@ export type SetState<TIntegration extends common.BaseIntegration> = <TState exte
     Arg<client.Client['setState']>,
     {
       name: utils.Cast<TState, string>
-      payload: TIntegration['states'][TState] | null
+      type: utils.Cast<TIntegration['states'][TState]['type'], string>
+      payload: TIntegration['states'][TState]['payload'] | null
     }
   >
 ) => Promise<StateResponse<TIntegration, TState>>
@@ -273,7 +342,8 @@ export type GetOrSetState<TIntegration extends common.BaseIntegration> = <TState
     Arg<client.Client['getOrSetState']>,
     {
       name: utils.Cast<TState, string>
-      payload: TIntegration['states'][TState]
+      type: utils.Cast<TIntegration['states'][TState]['type'], string>
+      payload: TIntegration['states'][TState]['payload']
     }
   >
 ) => Promise<StateResponse<TIntegration, TState>>
@@ -283,7 +353,8 @@ export type PatchState<TIntegration extends common.BaseIntegration> = <TState ex
     Arg<client.Client['patchState']>,
     {
       name: utils.Cast<TState, string>
-      payload: Partial<TIntegration['states'][TState]>
+      type: utils.Cast<TIntegration['states'][TState]['type'], string>
+      payload: Partial<TIntegration['states'][TState]['payload']>
     }
   >
 ) => Promise<StateResponse<TIntegration, TState>>
@@ -296,6 +367,7 @@ export type DeleteFile<_TIntegration extends common.BaseIntegration> = client.Cl
 export type ListFiles<_TIntegration extends common.BaseIntegration> = client.Client['listFiles']
 export type GetFile<_TIntegration extends common.BaseIntegration> = client.Client['getFile']
 export type UpdateFileMetadata<_TIntegration extends common.BaseIntegration> = client.Client['updateFileMetadata']
+export type TrackAnalytics<_TIntegration extends common.BaseIntegration> = client.Client['trackAnalytics']
 
 export type ClientOperations<TIntegration extends common.BaseIntegration> = {
   createConversation: CreateConversation<TIntegration>
@@ -334,6 +406,7 @@ export type ClientOperations<TIntegration extends common.BaseIntegration> = {
   listFiles: ListFiles<TIntegration>
   getFile: GetFile<TIntegration>
   updateFileMetadata: UpdateFileMetadata<TIntegration>
+  trackAnalytics: TrackAnalytics<TIntegration>
 }
 
 export type ClientInputs<TIntegration extends common.BaseIntegration> = {

@@ -1,5 +1,5 @@
 import * as chat from '@botpress/chat'
-import * as chalk from 'chalk'
+import chalk from 'chalk'
 import * as readline from 'readline'
 import * as uuid from 'uuid'
 import * as utils from '../utils'
@@ -35,6 +35,7 @@ const MESSAGE_ICONS: Record<chat.Message['payload']['type'], string> = {
   text: '',
   video: '🎥',
   markdown: '',
+  bloc: '🧱',
 }
 
 const EXIT_KEYWORDS = ['exit', '.exit']
@@ -42,6 +43,7 @@ const EXIT_KEYWORDS = ['exit', '.exit']
 export type ChatProps = {
   client: chat.AuthenticatedClient
   conversationId: string
+  protocol: chat.ServerEventsProtocol
 }
 
 export class Chat {
@@ -60,7 +62,10 @@ export class Chat {
     this._switchAlternateScreenBuffer()
     this._events.on('state', this._renderMessages)
 
-    const connection = await this._props.client.listenConversation({ id: this._props.conversationId })
+    const connection = await this._props.client.listenConversation({
+      id: this._props.conversationId,
+      protocol: this._props.protocol,
+    })
     const keyboard = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -174,7 +179,7 @@ export class Chat {
     process.stdout.write('\x1B[2J\x1B[0;0H')
   }
 
-  private _messageToText = (message: chat.Message): string => {
+  private _messageToText = (message: Pick<chat.Message, 'payload'>): string => {
     const prefix = MESSAGE_ICONS[message.payload.type]
     switch (message.payload.type) {
       case 'audio':
@@ -205,6 +210,11 @@ export class Chat {
         return prefix + message.payload.videoUrl
       case 'markdown':
         return prefix + message.payload.markdown
+      case 'bloc':
+        return [
+          prefix,
+          ...message.payload.items.map((item) => this._messageToText({ payload: item })).map((l) => `\t${l}`),
+        ].join('\n')
       default:
         type _assertion = utils.types.AssertNever<typeof message.payload>
         return '<unknown>'

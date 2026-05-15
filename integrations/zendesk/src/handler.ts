@@ -1,14 +1,19 @@
-import { createOrUpdateUser } from '@botpress/common'
 import { getZendeskClient } from './client'
 import { articlePublished } from './events/article-published'
 import { articleUnpublished } from './events/article-unpublished'
+import { executeMessageReceived } from './events/message-received'
 import { executeTicketAssigned } from './events/ticket-assigned'
 import { executeTicketSolved } from './events/ticket-solved'
+import { oauthCallbackHandler } from './oauth'
 import type { TriggerPayload } from './triggers'
 import { ZendeskEvent } from './webhookEvents'
 import * as bp from '.botpress'
 
-export const handler: bp.IntegrationProps['handler'] = async ({ req, ctx, client, logger }) => {
+export const handler: bp.IntegrationProps['handler'] = async ({ req, ctx, client: bpClient, logger }) => {
+  if (req.path.startsWith('/oauth')) {
+    return await oauthCallbackHandler({ req, ctx, client: bpClient, logger })
+  }
+
   if (!req.body) {
     logger.forBot().warn('Handler received an empty body')
     return
@@ -21,10 +26,10 @@ export const handler: bp.IntegrationProps['handler'] = async ({ req, ctx, client
 
     switch (event.type) {
       case 'zen:event-type:article.published':
-        await articlePublished({ event, client, ctx, logger })
+        await articlePublished({ event, client: bpClient, ctx, logger })
         break
       case 'zen:event-type:article.unpublished':
-        await articleUnpublished({ event, client, ctx, logger })
+        await articleUnpublished({ event, client: bpClient, ctx, logger })
         break
       default:
         logger.forBot().warn('Unsupported event type: ' + event.type)
@@ -34,53 +39,18 @@ export const handler: bp.IntegrationProps['handler'] = async ({ req, ctx, client
     return
   }
 
-  const zendeskClient = getZendeskClient(ctx.configuration)
+  const zendeskClient = await getZendeskClient(bpClient, ctx, logger)
   const trigger = JSON.parse(req.body)
   const zendeskTrigger = trigger as TriggerPayload
 
   switch (zendeskTrigger.type) {
     case 'newMessage':
-      const { conversation } = await client.getOrCreateConversation({
-        channel: 'hitl',
-        tags: {
-          id: zendeskTrigger.ticketId,
-        },
-      })
-
-      const { user } = await createOrUpdateUser({
-        client,
-        name: zendeskTrigger.currentUser.name,
-        pictureUrl: zendeskTrigger.currentUser.remote_photo_url,
-        tags: {
-          id: zendeskTrigger.currentUser.id,
-          email: zendeskTrigger.currentUser.email,
-          role: zendeskTrigger.currentUser.role,
-        },
-        discriminateByTags: ['id'],
-      })
-
-      if (!zendeskTrigger.currentUser.externalId?.length) {
-        await zendeskClient.updateUser(zendeskTrigger.currentUser.id, {
-          external_id: user.id,
-        })
-      }
-
-      const messageWithoutAuthor = zendeskTrigger.comment.split('\n').slice(3).join('\n')
-
-      await client.createMessage({
-        tags: {},
-        type: 'text',
-        userId: user.id,
-        conversationId: conversation.id,
-        payload: { text: messageWithoutAuthor },
-      })
-
-      return
-
+      return await executeMessageReceived({ zendeskClient, zendeskTrigger, client: bpClient, ctx, logger })
     case 'ticketAssigned':
-      return await executeTicketAssigned({ zendeskTrigger, client })
+      return await executeTicketAssigned({ zendeskTrigger, client: bpClient, ctx, logger })
     case 'ticketSolved':
-      return await executeTicketSolved({ zendeskTrigger, client })
+      await executeMessageReceived({ zendeskClient, zendeskTrigger, client: bpClient, ctx, logger })
+      return await executeTicketSolved({ zendeskTrigger, client: bpClient, ctx, logger })
 
     default:
       logger.forBot().warn('Unsupported trigger type: ' + zendeskTrigger.type)

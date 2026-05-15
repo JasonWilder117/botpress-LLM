@@ -2,9 +2,10 @@ import { backOff } from 'exponential-backoff'
 import { createNanoEvents, Unsubscribe } from 'nanoevents'
 
 import { ExtendedClient, getExtendedClient } from './bp-client'
+import { CognitiveBeta, getCognitiveV2Model, isKnownV2Model } from './cognitive-v2'
+
 import { getActionFromError } from './errors'
 import { InterceptorManager } from './interceptors'
-import { GenerateContentOutput } from './llm'
 import {
   DOWNTIME_THRESHOLD_MINUTES,
   getBestModels,
@@ -16,7 +17,8 @@ import {
   pickModel,
   RemoteModelProvider,
 } from './models'
-import { CognitiveProps, Events, InputProps, Request, Response } from './types'
+import { GenerateContentOutput } from './schemas.gen'
+import { CognitiveProps, Events, InputModel, InputProps, Request, Response } from './types'
 
 export class Cognitive {
   public ['$$IS_COGNITIVE'] = true
@@ -30,20 +32,54 @@ export class Cognitive {
     response: new InterceptorManager<Response>(),
   }
 
-  private _client: ExtendedClient
-  private _preferences: ModelPreferences | null = null
-  private _provider: ModelProvider
+  protected _models: Model[] = []
+  protected _timeoutMs: number = 5 * 60 * 1000 // Default timeout of 5 minutes
+  protected _maxRetries: number = 5 // Default max retries
+  protected _client: ExtendedClient
+  protected _preferences: ModelPreferences | null = null
+  protected _provider: ModelProvider
+  protected _downtimes: ModelPreferences['downtimes'] = []
+  protected _useBeta: boolean = false
+  protected _debug = false
+  private _remoteModelCache = new Map<string, Model>()
+  private _remoteModelCacheTime = 0
+  private _remoteModelCachePending: Promise<Map<string, Model>> | null = null
+
   private _events = createNanoEvents<Events>()
-  private _downtimes: ModelPreferences['downtimes'] = []
-  private _models: Model[] = []
 
   public constructor(props: CognitiveProps) {
     this._client = getExtendedClient(props.client)
     this._provider = props.provider ?? new RemoteModelProvider(props.client)
+    this._timeoutMs = props.timeout ?? this._timeoutMs
+    this._maxRetries = props.maxRetries ?? this._maxRetries
+    this._useBeta = props.__experimental_beta ?? false
   }
 
   public get client(): ExtendedClient {
     return this._client
+  }
+
+  public clone(): Cognitive {
+    const copy = new Cognitive({
+      client: this._client.clone(),
+      provider: this._provider,
+      timeout: this._timeoutMs,
+      maxRetries: this._maxRetries,
+      __debug: this._debug,
+      __experimental_beta: this._useBeta,
+    })
+
+    copy._models = [...this._models]
+    copy._preferences = this._preferences ? { ...this._preferences } : null
+    copy._downtimes = [...this._downtimes]
+    copy._remoteModelCache = new Map(this._remoteModelCache)
+    copy._remoteModelCacheTime = this._remoteModelCacheTime
+    copy._remoteModelCachePending = null
+
+    copy.interceptors.request = this.interceptors.request
+    copy.interceptors.response = this.interceptors.response
+
+    return copy
   }
 
   public on<K extends keyof Events>(this: this, event: K, cb: Events[K]): Unsubscribe {
@@ -100,6 +136,10 @@ export class Cognitive {
     })
   }
 
+  private _getPrimaryModel(input: InputProps): InputModel | undefined {
+    return Array.isArray(input.model) ? input.model[0] : input.model
+  }
+
   private async _selectModel(ref: string): Promise<{ integration: string; model: string }> {
     const parseRef = (ref: string) => {
       const parts = ref.split(':')
@@ -114,7 +154,7 @@ export class Cognitive {
 
     const downtimes = [...preferences.downtimes, ...(this._downtimes ?? [])]
 
-    if (ref === 'best') {
+    if (ref === 'best' || ref === 'auto') {
       return parseRef(pickModel(preferences.best, downtimes))
     }
 
@@ -125,12 +165,67 @@ export class Cognitive {
     return parseRef(pickModel([ref as ModelRef, ...preferences.best, ...preferences.fast], downtimes))
   }
 
-  public async getModelDetails(model: string) {
+  public async fetchRemoteModels(): Promise<Map<string, Model>> {
+    if (this._remoteModelCacheTime > 0 && Date.now() - this._remoteModelCacheTime < 60 * 60 * 1000) {
+      return this._remoteModelCache
+    }
+
+    if (this._remoteModelCachePending !== null) {
+      return this._remoteModelCachePending
+    }
+
+    this._remoteModelCachePending = this._doFetchRemoteModels().finally(() => {
+      this._remoteModelCachePending = null
+    })
+
+    return this._remoteModelCachePending
+  }
+
+  private async _doFetchRemoteModels(): Promise<Map<string, Model>> {
+    const betaClient = new CognitiveBeta(this._client.config)
+    const remoteModels = await betaClient.listModels()
+
+    this._remoteModelCache.clear()
+    this._remoteModelCacheTime = Date.now()
+
+    for (const m of remoteModels) {
+      const converted: Model = { ...m, ref: m.id as ModelRef, integration: 'cognitive-v2' }
+      this._remoteModelCache.set(m.id, converted)
+
+      if (m.aliases) {
+        for (const alias of m.aliases) {
+          this._remoteModelCache.set(alias, converted)
+        }
+      }
+    }
+
+    return this._remoteModelCache
+  }
+
+  public async getModelDetails(model: string): Promise<Model> {
+    if (this._useBeta) {
+      const resolvedModel = getCognitiveV2Model(model)
+      if (resolvedModel) {
+        return { ...resolvedModel, ref: resolvedModel.id as ModelRef, integration: 'cognitive-v2' }
+      }
+
+      if (isKnownV2Model(model)) {
+        try {
+          const remoteModels = await this.fetchRemoteModels()
+          const found = remoteModels.get(model)
+          if (found) {
+            return found
+          }
+        } catch {
+          // v2 unavailable — fall through to integration path
+        }
+      }
+    }
+
     await this.fetchInstalledModels()
     const { integration, model: modelName } = await this._selectModel(model)
     const def = this._models.find((m) => m.integration === integration && (m.name === modelName || m.id === modelName))
     if (!def) {
-      console.info('Models:', this._models)
       throw new Error(`Model ${modelName} not found`)
     }
 
@@ -138,22 +233,118 @@ export class Cognitive {
   }
 
   public async generateContent(input: InputProps): Promise<Response> {
+    const primaryInputModel = this._getPrimaryModel(input)
+
+    if (!this._useBeta || !isKnownV2Model(primaryInputModel)) {
+      return this._generateContent(input)
+    }
+
+    try {
+      return await this._generateContentV2(input)
+    } catch (err) {
+      if (input.signal?.aborted) {
+        throw err
+      }
+      // v2 failed — fall back to integration path transparently
+      return this._generateContent(input)
+    }
+  }
+
+  private async _generateContentV2(input: InputProps): Promise<Response> {
+    const v2Input = { ...input, messages: [...input.messages] }
+    if (v2Input.systemPrompt) {
+      // @ts-expect-error - system role is not supported in the integrations api, but is used in v2
+      v2Input.messages.unshift({ role: 'system', content: v2Input.systemPrompt })
+      delete v2Input.systemPrompt
+    }
+
+    const betaClient = new CognitiveBeta(this._client.config)
+    const props: Request = { input }
+
+    // Forward beta client events to main client events
+    betaClient.on('request', () => {
+      this._events.emit('request', props)
+    })
+
+    betaClient.on('error', (_req, error) => {
+      this._events.emit('error', props, error)
+    })
+
+    betaClient.on('retry', (_req, error) => {
+      this._events.emit('retry', props, error)
+    })
+
+    const response = await betaClient.generateText(v2Input as any, {
+      signal: input.signal,
+      timeout: this._timeoutMs,
+    })
+
+    const result: Response = {
+      output: {
+        id: 'beta-output',
+        provider: response.metadata.provider,
+        model: response.metadata.model!,
+        choices: [
+          {
+            type: 'text',
+            content: response.output,
+            role: 'assistant',
+            index: 0,
+            stopReason: response.metadata.stopReason ?? 'stop',
+          },
+        ],
+        usage: {
+          inputTokens: response.metadata.usage.inputTokens,
+          inputCost: 0,
+          outputTokens: response.metadata.usage.outputTokens,
+          outputCost: response.metadata.cost ?? 0,
+        },
+        botpress: {
+          cost: response.metadata.cost ?? 0,
+        },
+      },
+      meta: {
+        cached: response.metadata.cached,
+        model: { integration: response.metadata.provider, model: response.metadata.model! },
+        latency: response.metadata.latency!,
+        cost: {
+          input: 0,
+          output: response.metadata.cost || 0,
+        },
+        tokens: {
+          input: response.metadata.usage.inputTokens,
+          output: response.metadata.usage.outputTokens,
+        },
+      },
+    }
+
+    // Emit final response event with actual data
+    this._events.emit('response', props, result)
+
+    return result
+  }
+
+  private async _generateContent(input: InputProps): Promise<Response> {
     const start = Date.now()
 
-    const signal = input.signal ?? AbortSignal.timeout(30_000)
+    const signal = input.signal ?? AbortSignal.timeout(this._timeoutMs)
 
     const client = this._client.abortable(signal)
+
+    const primaryInputModel = this._getPrimaryModel(input)
 
     let props: Request = { input }
     let integration: string
     let model: string
+
+    this._events.emit('request', props)
 
     const { output, meta } = await backOff<{
       output: GenerateContentOutput
       meta: any
     }>(
       async () => {
-        const selection = await this._selectModel(input.model ?? 'best')
+        const selection = await this._selectModel(primaryInputModel ?? 'best')
 
         integration = selection.integration
         model = selection.model
@@ -173,11 +364,11 @@ export class Cognitive {
           if (signal?.aborted) {
             // We don't want to retry if the request was aborted
             this._events.emit('aborted', props, err)
+            signal.throwIfAborted()
             return false
           }
 
-          if (_attempt > 3) {
-            // We don't want to retry more than 3 times
+          if (_attempt > this._maxRetries) {
             this._events.emit('error', props, err)
             return false
           }

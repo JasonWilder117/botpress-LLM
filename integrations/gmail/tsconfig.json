@@ -4,8 +4,10 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react",
     "lib": ["es2022", "DOM"],
-    "baseUrl": ".",
-    "outDir": "dist"
+    "paths": { "*": ["./*"] },
+    "outDir": "dist",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
-  "include": [".botpress/**/*", "src/**/*", "integration.definition.ts"]
+  "include": [".botpress/**/*", "definitions/**/*", "src/**/*", "*.ts"]
 }

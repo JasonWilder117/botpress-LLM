@@ -13,32 +13,51 @@ export const prepareCreateBotBody = async (bot: sdk.BotDefinition): Promise<type
         ...action,
         input: {
           ...action.input,
-          schema: await utils.schema.mapZodToJsonSchema(action.input),
+          schema: await utils.schema.mapZodToJsonSchema(action.input, {
+            useLegacyZuiTransformer: bot.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: bot.__advanced?.toJSONSchemaOptions,
+          }),
         },
         output: {
           ...action.output,
-          schema: await utils.schema.mapZodToJsonSchema(action.output),
+          schema: await utils.schema.mapZodToJsonSchema(action.output, {
+            useLegacyZuiTransformer: bot.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: bot.__advanced?.toJSONSchemaOptions,
+          }),
         },
       }))
     : undefined,
   configuration: bot.configuration
     ? {
         ...bot.configuration,
-        schema: await utils.schema.mapZodToJsonSchema(bot.configuration),
+        schema: await utils.schema.mapZodToJsonSchema(bot.configuration, {
+          useLegacyZuiTransformer: bot.__advanced?.useLegacyZuiTransformer,
+          toJSONSchemaOptions: bot.__advanced?.toJSONSchemaOptions,
+        }),
       }
     : undefined,
   events: bot.events
     ? await utils.records.mapValuesAsync(bot.events, async (event) => ({
         ...event,
-        schema: await utils.schema.mapZodToJsonSchema(event),
+        schema: await utils.schema.mapZodToJsonSchema(event, {
+          useLegacyZuiTransformer: bot.__advanced?.useLegacyZuiTransformer,
+          toJSONSchemaOptions: bot.__advanced?.toJSONSchemaOptions,
+        }),
       }))
     : undefined,
   states: bot.states
-    ? await utils.records.mapValuesAsync(bot.states, async (state) => ({
-        ...state,
-        schema: await utils.schema.mapZodToJsonSchema(state),
-      }))
+    ? (utils.records.filterValues(
+        await utils.records.mapValuesAsync(bot.states, async (state) => ({
+          ...state,
+          schema: await utils.schema.mapZodToJsonSchema(state, {
+            useLegacyZuiTransformer: bot.__advanced?.useLegacyZuiTransformer,
+            toJSONSchemaOptions: bot.__advanced?.toJSONSchemaOptions,
+          }),
+        })),
+        ({ type }) => type !== 'workflow'
+      ) as types.CreateBotRequestBody['states'])
     : undefined,
+  tags: bot.attributes,
 })
 
 export const prepareUpdateBotBody = (
@@ -48,7 +67,14 @@ export const prepareUpdateBotBody = (
   ...localBot,
   states: utils.records.setNullOnMissingValues(localBot.states, remoteBot.states),
   recurringEvents: utils.records.setNullOnMissingValues(localBot.recurringEvents, remoteBot.recurringEvents),
-  events: utils.records.setNullOnMissingValues(localBot.events, remoteBot.events),
+  events: utils.attributes.prepareAttributeUpdateBody({
+    localItems: utils.records.setNullOnMissingValues(localBot.events, remoteBot.events),
+    remoteItems: remoteBot.events,
+  }),
+  actions: utils.attributes.prepareAttributeUpdateBody({
+    localItems: utils.records.setNullOnMissingValues(localBot.actions, remoteBot.actions),
+    remoteItems: remoteBot.actions,
+  }),
   user: {
     ...localBot.user,
     tags: utils.records.setNullOnMissingValues(localBot.user?.tags, remoteBot.user?.tags),
@@ -61,5 +87,10 @@ export const prepareUpdateBotBody = (
     ...localBot.message,
     tags: utils.records.setNullOnMissingValues(localBot.message?.tags, remoteBot.message?.tags),
   },
-  integrations: utils.records.setNullOnMissingValues(localBot.integrations, remoteBot.integrations),
+  integrations: utils.integrations.prepareIntegrationsUpdate(
+    utils.records.setNullOnMissingValues(localBot.integrations, remoteBot.integrations),
+    remoteBot.integrations
+  ),
+  plugins: utils.records.setNullOnMissingValues(localBot.plugins, remoteBot.plugins),
+  tags: localBot.tags, // TODO: allow removing bot tags (aka attributes) by setting to null
 })

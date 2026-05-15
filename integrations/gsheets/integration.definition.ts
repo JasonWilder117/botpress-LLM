@@ -12,9 +12,12 @@ import {
   user,
 } from './definitions'
 
+export const INTEGRATION_NAME = 'gsheets'
+export const INTEGRATION_VERSION = '2.1.9'
+
 export default new sdk.IntegrationDefinition({
-  name: 'gsheets',
-  version: '1.1.1',
+  name: INTEGRATION_NAME,
+  version: INTEGRATION_VERSION,
   description: 'Access, update, and append Google Sheets data.',
   title: 'Google Sheets',
   readme: 'hub.md',
@@ -28,4 +31,9 @@ export default new sdk.IntegrationDefinition({
   secrets,
   states,
   user,
+  attributes: {
+    category: 'Project Management',
+    guideSlug: 'gsheets',
+    repo: 'botpress',
+  },
 })

@@ -6,7 +6,21 @@ export const states = {
     type: 'integration',
     schema: z.object({
       accessToken: z.string().title('Access Token').describe('The access token for Linear'),
+      refreshToken: z
+        .string()
+        .title('Refresh Token')
+        .describe('The refresh token needed when the access token expires'),
       expiresAt: z.string().title('Expires At').describe('The time when the access token expires'),
+    }),
+  },
+  environment: {
+    type: 'integration',
+    schema: z.object({
+      env: z
+        .enum(['preview', 'production'])
+        .title('Environment')
+        .describe('The environment where the integration is installed'),
+      source: z.string().optional().title('Source').describe('The source of the OAuth request, eg: "desk"'),
     }),
   },
 

@@ -2,30 +2,87 @@
 import { z } from '@bpinternal/zui'
 
 import { clamp } from 'lodash-es'
+import { ZaiContext } from '../context'
+import { Response } from '../response'
+import { getTokenizer } from '../tokenizer'
 import { Zai } from '../zai'
 import { PROMPT_INPUT_BUFFER, PROMPT_OUTPUT_BUFFER } from './constants'
 
-export type Options = z.input<typeof Options>
+export type Options = {
+  /** The maximum number of tokens to generate */
+  length?: number
+}
+
 const Options = z.object({
   length: z.number().min(1).max(100_000).optional().describe('The maximum number of tokens to generate'),
 })
 
 declare module '@botpress/zai' {
   interface Zai {
-    /** Generates a text of the desired length according to the prompt */
-    text(prompt: string, options?: Options): Promise<string>
+    /**
+     * Generates text content based on a natural language prompt.
+     *
+     * This operation creates original text content using LLMs with optional length constraints.
+     * Perfect for generating descriptions, emails, articles, creative content, and more.
+     *
+     * @param prompt - Natural language description of what text to generate
+     * @param options - Optional configuration for text length
+     * @returns Response promise resolving to the generated text
+     *
+     * @example Product description
+     * ```typescript
+     * const description = await zai.text(
+     *   'Write a compelling product description for eco-friendly bamboo toothbrushes'
+     * )
+     * ```
+     *
+     * @example With length constraint
+     * ```typescript
+     * const tagline = await zai.text(
+     *   'Create a catchy tagline for a fitness app',
+     *   { length: 10 } // ~10 tokens (7-8 words)
+     * )
+     * ```
+     *
+     * @example Email generation
+     * ```typescript
+     * const email = await zai.text(`
+     *   Write a professional email to a customer explaining
+     *   that their order will be delayed by 2 days due to weather.
+     *   Apologize and offer a 10% discount on their next purchase.
+     * `, { length: 150 })
+     * ```
+     *
+     * @example Blog post
+     * ```typescript
+     * const blogPost = await zai.text(`
+     *   Write an informative blog post about the benefits of meditation
+     *   for software developers. Include practical tips and scientific research.
+     * `, { length: 500 })
+     * ```
+     *
+     * @example Social media content
+     * ```typescript
+     * const tweet = await zai.text(
+     *   'Write an engaging tweet announcing our new AI-powered chatbot feature',
+     *   { length: 30 } // Twitter-friendly length
+     * )
+     * ```
+     */
+    text(prompt: string, options?: Options): Response<string>
   }
 }
 
-Zai.prototype.text = async function (this: Zai, prompt, _options) {
+const text = async (prompt: string, _options: Options | undefined, ctx: ZaiContext): Promise<string> => {
+  ctx.controller.signal.throwIfAborted()
   const options = Options.parse(_options ?? {})
-  const tokenizer = await this.getTokenizer()
-  await this.fetchModelDetails()
+  const tokenizer = await getTokenizer()
+  const model = await ctx.getModel()
 
-  prompt = tokenizer.truncate(prompt, Math.max(this.ModelDetails.input.maxTokens - PROMPT_INPUT_BUFFER, 100))
+  prompt = tokenizer.truncate(prompt, Math.max(model.input.maxTokens - PROMPT_INPUT_BUFFER, 100))
 
   if (options.length) {
-    options.length = Math.min(this.ModelDetails.output.maxTokens - PROMPT_OUTPUT_BUFFER, options.length)
+    options.length = Math.min(model.output.maxTokens - PROMPT_OUTPUT_BUFFER, options.length)
   }
 
   const instructions: string[] = []
@@ -51,7 +108,7 @@ Zai.prototype.text = async function (this: Zai, prompt, _options) {
 | 300-500 tokens| A long paragraph (200-300 words)   |`.trim()
   }
 
-  const { output } = await this.callModel({
+  const { extracted } = await ctx.generateContent({
     systemPrompt: `
 Generate a text that fulfills the user prompt below. Answer directly to the prompt, without any acknowledgements or fluff. Also, make sure the text is standalone and complete.
 ${instructions.map((x) => `- ${x}`).join('\n')}
@@ -59,7 +116,27 @@ ${chart}
 `.trim(),
     temperature: 0.7,
     messages: [{ type: 'text', content: prompt, role: 'user' }],
-    maxTokens: options.length,
+    transform: (text) => {
+      if (!text.trim().length) {
+        throw new Error('The model did not return a valid summary. The response was empty.')
+      }
+
+      return text
+    },
   })
-  return output?.choices?.[0]?.content! as string
+
+  return extracted
+}
+
+Zai.prototype.text = function (this: Zai, prompt: string, _options?: Options): Response<string> {
+  const context = new ZaiContext({
+    client: this.client,
+    modelId: this.Model,
+    taskId: this.taskId,
+    taskType: 'zai.text',
+    adapter: this.adapter,
+    memoizer: this._resolveMemoizer(),
+  })
+
+  return new Response<string>(context, text(prompt, _options, context), (result) => result)
 }

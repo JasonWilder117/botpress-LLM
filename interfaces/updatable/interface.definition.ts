@@ -1,12 +1,11 @@
-/* bplint-disable */
 import { z, InterfaceDefinition } from '@botpress/sdk'
 
-const baseItem = z.object({ id: z.string() })
+const baseItem = z.object({ id: z.string().title('Item ID').describe('The unique identifier for the updatable item') })
 const withId = (schema: z.ZodTypeAny) => z.intersection(schema, baseItem)
 
 export default new InterfaceDefinition({
   name: 'updatable',
-  version: '0.0.1',
+  version: '0.0.3',
   entities: {
     item: {
       schema: baseItem,
@@ -29,5 +28,8 @@ export default new InterfaceDefinition({
         schema: (args) => z.object({ item: withId(args.item) }),
       },
     },
+  },
+  __advanced: {
+    useLegacyZuiTransformer: true,
   },
 })

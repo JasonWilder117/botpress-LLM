@@ -1,77 +1,40 @@
-/* bplint-disable */
-import { z, IntegrationDefinition } from '@botpress/sdk'
+import * as sdk from '@botpress/sdk'
+import filesReadonly from './bp_modules/files-readonly'
+import { actions, configuration, configurations, events, identifier, secrets, states, user } from './definitions'
 
-const emptyObject = z.object({})
-const anyObject = z.object({}).passthrough()
+export const INTEGRATION_NAME = 'notion'
+export const INTEGRATION_VERSION = '3.0.5'
 
-export default new IntegrationDefinition({
-  name: 'notion',
-  description: 'Add pages and comments, manage databases, and engage in discussions — all within your chatbot.',
+export default new sdk.IntegrationDefinition({
+  name: INTEGRATION_NAME,
+  version: INTEGRATION_VERSION,
   title: 'Notion',
-  version: '0.3.4',
+  description: 'Add pages and comments, manage databases, and engage in discussions — all within your chatbot.',
   icon: 'icon.svg',
   readme: 'hub.md',
-  configuration: {
-    schema: z.object({
-      /**
-       * The auth token for the integration [Notion Integrations](https://developers.notion.com/docs/authorization#internal-integration-auth-flow-set-up)
-       */
-      authToken: z.string().min(1),
-    }),
+  attributes: {
+    category: 'File Management',
+    guideSlug: 'notion',
+    repo: 'botpress',
   },
-  user: { tags: { id: {} } },
+  actions,
+  configuration,
+  configurations,
+  identifier,
+  events,
+  secrets,
+  states,
+  user,
+}).extend(filesReadonly, ({}) => ({
+  entities: {},
   actions: {
-    addPageToDb: {
-      input: {
-        schema: z.object({
-          databaseId: z.string().min(1),
-          pageProperties: z.record(z.string(), anyObject),
-        }),
-      },
-      output: {
-        schema: emptyObject,
-      },
+    listItemsInFolder: {
+      name: 'filesReadonlyListItemsInFolder',
+      attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
     },
-    addCommentToPage: {
-      input: {
-        schema: z.object({
-          pageId: z.string().min(1),
-          commentBody: z.string().min(1),
-        }),
-      },
-      output: {
-        schema: emptyObject,
-      },
-    },
-    deleteBlock: {
-      input: { schema: z.object({ blockId: z.string().min(1) }), ui: { blockId: {} } },
-      output: {
-        schema: emptyObject,
-      },
-    },
-    getDb: {
-      input: { schema: z.object({ databaseId: z.string().min(1) }) },
-      output: {
-        schema: z.object({
-          object: z.string(),
-          properties: z.record(z.string(), anyObject),
-          /**
-           * Refer to [getDbStructure](./src/notion/notion.ts) for more details
-           */
-          structure: z.string(),
-        }),
-      },
-    },
-    addCommentToDiscussion: {
-      input: {
-        schema: z.object({
-          discussionId: z.string().min(1),
-          commentBody: z.string().min(1),
-        }),
-      },
-      output: {
-        schema: emptyObject,
-      },
+    transferFileToBotpress: {
+      name: 'filesReadonlyTransferFileToBotpress',
+      attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
     },
   },
-})
+}))

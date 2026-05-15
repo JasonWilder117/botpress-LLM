@@ -6,11 +6,18 @@ import * as utils from '../utils'
 
 export type LoggerOptions = {
   verbose: boolean
-  json?: boolean // prevents loggin anything else than json
+  json: boolean // prevents loggin anything else than json
+  outStream: NodeJS.WriteStream
+  errStream: NodeJS.WriteStream
 }
 
 const STDOUT_CHUNK_SIZE = 100
-const DEFAULT_OPTIONS: LoggerOptions = { verbose: false }
+const DEFAULT_OPTIONS: LoggerOptions = {
+  verbose: false,
+  json: false,
+  outStream: process.stdout,
+  errStream: process.stderr,
+}
 
 type ChalkColor = (str: string) => string
 const NO_COLOR: ChalkColor = (str: string) => str
@@ -41,7 +48,7 @@ const FG_COLORS: Record<Color, ChalkColor> = {
   purple: (str: string) => chalk.rgb(...PURPLE)(str),
 }
 
-type Symbol = '✓' | '⚠' | '×' | '●' | ' ' | '○'
+type Symbol = '✓' | '⚠' | '×' | '●' | ' ' | '○' | '→'
 type Color = 'blue' | 'green' | 'yellow' | 'red' | 'pink' | 'white' | 'orange' | 'purple'
 type LogPrefix = { symbol: Symbol; fg?: Color; bg?: Color; indent?: number } | string
 type SymbolRenderer<T extends Symbol> = { default: T; windows?: string; mac?: string }
@@ -72,6 +79,7 @@ const danger: SymbolRenderer<'⚠'> = { default: '⚠' }
 const circle: SymbolRenderer<'○'> = { default: '○' }
 const disc: SymbolRenderer<'●'> = { default: '●' }
 const space: SymbolRenderer<' '> = { default: ' ' }
+const arrow: SymbolRenderer<'→'> = { default: '→' }
 
 const renderers: Record<Symbol, SymbolRenderer<Symbol>> = {
   '✓': checkmark,
@@ -80,6 +88,7 @@ const renderers: Record<Symbol, SymbolRenderer<Symbol>> = {
   '○': circle,
   '●': disc,
   ' ': space,
+  '→': arrow,
 }
 
 const BOX_OPTIONS: boxen.Options = {
@@ -88,6 +97,8 @@ const BOX_OPTIONS: boxen.Options = {
   borderStyle: 'round',
   borderColor: 'yellow',
 }
+
+export type StreamType = 'out' | 'err'
 
 export abstract class BaseLogger {
   protected opts: LoggerOptions
@@ -175,8 +186,9 @@ export abstract class BaseLogger {
     }
   }
 
-  protected render(message: string, stream: NodeJS.WriteStream = process.stdout): void {
+  protected render(message: string, streamType: StreamType = 'out'): void {
     // chunking the message ensures that the process won't exit before the message is fully written
+    const stream = streamType === 'err' ? this.opts.errStream : this.opts.outStream
     for (const chunk of utils.string.chunkString(message, STDOUT_CHUNK_SIZE)) {
       stream.write(chunk)
     }

@@ -5,6 +5,21 @@ import * as utils from '../../utils/type-utils'
 import * as types from './types'
 import { FooBarBazIntegration } from '../../fixtures'
 
+/**
+ * Utility type to modify the response of an operation to have optional tags
+ */
+type _WithOptionalTagResponse<TOperation extends (req: any) => Promise<{ message: { tags: Record<string, string> } }>> =
+  (...x: Parameters<TOperation>) => Promise<
+    utils.Normalize<
+      utils.Merge<
+        Awaited<ReturnType<TOperation>>,
+        {
+          message: utils.Merge<Awaited<ReturnType<TOperation>>['message'], { tags: Record<string, string | undefined> }>
+        }
+      >
+    >
+  >
+
 const _mockClient = <TIntegration extends BaseIntegration>() =>
   new Proxy<types.ClientOperations<TIntegration>>({} as any, {
     get: () => {
@@ -82,22 +97,22 @@ describe.concurrent('ClientOperations', () => {
   })
   test('createMessage of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['createMessage']
-    type General = client.Client['createMessage']
+    type General = _WithOptionalTagResponse<client.Client['createMessage']>
     type _assertion = utils.AssertExtends<Specific, General>
   })
   test('getOrCreateMessage of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['getOrCreateMessage']
-    type General = client.Client['getOrCreateMessage']
+    type General = _WithOptionalTagResponse<client.Client['getOrCreateMessage']>
     type _assertion = utils.AssertExtends<Specific, General>
   })
   test('getMessage of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['getMessage']
-    type General = client.Client['getMessage']
+    type General = _WithOptionalTagResponse<client.Client['getMessage']>
     type _assertion = utils.AssertExtends<Specific, General>
   })
   test('updateMessage of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['updateMessage']
-    type General = client.Client['updateMessage']
+    type General = _WithOptionalTagResponse<client.Client['updateMessage']>
     type _assertion = utils.AssertExtends<Specific, General>
   })
   test('listMessages of IntegrationSpecificClient extends general', () => {
@@ -143,22 +158,22 @@ describe.concurrent('ClientOperations', () => {
   test('getState of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['getState']
     type General = client.Client['getState']
-    type _assertion = utils.AssertExtends<Specific, General>
+    type _assertion = utils.AssertTrue<utils.IsStricterFunction<Specific, General>>
   })
   test('setState of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['setState']
     type General = client.Client['setState']
-    type _assertion = utils.AssertExtends<Specific, General>
+    type _assertion = utils.AssertTrue<utils.IsStricterFunction<Specific, General>>
   })
   test('getOrSetState of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['getOrSetState']
     type General = client.Client['getOrSetState']
-    type _assertion = utils.AssertExtends<Specific, General>
+    type _assertion = utils.AssertTrue<utils.IsStricterFunction<Specific, General>>
   })
   test('patchState of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['patchState']
     type General = client.Client['patchState']
-    type _assertion = utils.AssertExtends<Specific, General>
+    type _assertion = utils.AssertTrue<utils.IsStricterFunction<Specific, General>>
   })
   test('configureIntegration of IntegrationSpecificClient extends general', () => {
     type Specific = types.ClientOperations<BaseIntegration>['configureIntegration']
@@ -198,18 +213,130 @@ describe.concurrent('ClientOperations', () => {
 
   test('getMessage response should include all possible message tags', () => {
     type Actual = types.ClientOutputs<FooBarBazIntegration>['getMessage']['message']['tags']
-    type Expected = {
-      fooMessageTag1?: string | undefined
-      fooMessageTag2?: string | undefined
-      fooMessageTag3?: string | undefined
-      barMessageTag1?: string | undefined
-      barMessageTag2?: string | undefined
-      barMessageTag3?: string | undefined
-      bazMessageTag1?: string | undefined
-      bazMessageTag2?: string | undefined
-      bazMessageTag3?: string | undefined
-    }
+    type Expected =
+      | {
+          fooMessageTag1?: string | undefined
+          fooMessageTag2?: string | undefined
+          fooMessageTag3?: string | undefined
+        }
+      | {
+          barMessageTag1?: string | undefined
+          barMessageTag2?: string | undefined
+          barMessageTag3?: string | undefined
+        }
+      | {
+          bazMessageTag1?: string | undefined
+          bazMessageTag2?: string | undefined
+          bazMessageTag3?: string | undefined
+        }
     type _assertion = utils.AssertTrue<utils.IsEqual<Actual, Expected>>
+  })
+
+  test('getMessage response should be a union of all possible payloads', () => {
+    type Actual = types.ClientOutputs<FooBarBazIntegration>['getMessage']['message']
+    type Expected = {
+      id: string
+      createdAt: string
+      updatedAt: string
+      direction: 'incoming' | 'outgoing'
+      userId: string
+      conversationId: string
+    } & (
+      | {
+          type: 'messageFoo'
+          payload: { foo: string }
+          tags: {
+            fooMessageTag1?: string | undefined
+            fooMessageTag2?: string | undefined
+            fooMessageTag3?: string | undefined
+          }
+        }
+      | {
+          type: 'messageBar'
+          payload: { bar: number }
+          tags: {
+            barMessageTag1?: string | undefined
+            barMessageTag2?: string | undefined
+            barMessageTag3?: string | undefined
+          }
+        }
+      | {
+          type: 'messageBaz'
+          payload: { baz: boolean }
+          tags: {
+            bazMessageTag1?: string | undefined
+            bazMessageTag2?: string | undefined
+            bazMessageTag3?: string | undefined
+          }
+        }
+    )
+    type _assertion = utils.AssertTrue<utils.IsEquivalent<Actual, Expected>>
+  })
+
+  test('Conversation operations responses should include all possible conversation tags', () => {
+    type Expected =
+      | {
+          fooConversationTag1?: string | undefined
+          fooConversationTag2?: string | undefined
+          fooConversationTag3?: string | undefined
+        }
+      | {
+          barConversationTag1?: string | undefined
+          barConversationTag2?: string | undefined
+          barConversationTag3?: string | undefined
+        }
+      | {
+          bazConversationTag1?: string | undefined
+          bazConversationTag2?: string | undefined
+          bazConversationTag3?: string | undefined
+        }
+    type ActualGetConversation = types.ClientOutputs<FooBarBazIntegration>['getConversation']['conversation']['tags']
+    type _assertionGet = utils.AssertTrue<utils.IsEqual<ActualGetConversation, Expected>>
+
+    type ActualCreateConversation =
+      types.ClientOutputs<FooBarBazIntegration>['createConversation']['conversation']['tags']
+    type _assertionCreate = utils.AssertTrue<utils.IsEqual<ActualCreateConversation, Expected>>
+
+    type ActualGetOrCreateConversation =
+      types.ClientOutputs<FooBarBazIntegration>['getOrCreateConversation']['conversation']['tags']
+    type _assertionGetOrCreate = utils.AssertTrue<utils.IsEqual<ActualGetOrCreateConversation, Expected>>
+
+    type ActualUpdateConversation =
+      types.ClientOutputs<FooBarBazIntegration>['updateConversation']['conversation']['tags']
+    type _assertionUpdate = utils.AssertTrue<utils.IsEqual<ActualUpdateConversation, Expected>>
+  })
+
+  test('createConversation and getOrCreateConversation response should only include conversation tags for the provided channel', async () => {
+    type Expected = {
+      fooConversationTag1?: string | undefined
+      fooConversationTag2?: string | undefined
+      fooConversationTag3?: string | undefined
+    }
+
+    const client = _mockClient<FooBarBazIntegration>()
+    const _resultCreate = await client.createConversation({
+      channel: 'channelFoo',
+      tags: {
+        fooConversationTag1: '1',
+        fooConversationTag2: '2',
+        fooConversationTag3: '3',
+      },
+    })
+
+    type ActualCreateConversation = (typeof _resultCreate)['conversation']['tags']
+
+    const _resultGetOrCreate = await client.getOrCreateConversation({
+      channel: 'channelFoo',
+      tags: {
+        fooConversationTag1: '1',
+        fooConversationTag2: '2',
+        fooConversationTag3: '3',
+      },
+    })
+    type ActualGetOrCreateConversation = (typeof _resultGetOrCreate)['conversation']['tags']
+
+    type _assertionCreate = utils.AssertTrue<utils.IsEqual<ActualCreateConversation, Expected>>
+    type _assertionGetOrCreate = utils.AssertTrue<utils.IsEqual<ActualGetOrCreateConversation, Expected>>
   })
 
   test('getOrCreateConversation with FooBarBazIntegration stricly enforces allowed tags', () => {

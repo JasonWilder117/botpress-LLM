@@ -1,9 +1,9 @@
 import { RuntimeError, z } from '@botpress/sdk'
 import axios from 'axios'
+import { InstagramRecipientId } from './types'
 import * as bp from '.botpress'
 
 type InstagramClientConfig = { accessToken?: string; instagramId?: string }
-
 export class InstagramClient {
   private _clientId: string
   private _clientSecret: string
@@ -82,7 +82,7 @@ export class InstagramClient {
   public async subscribeToWebhooks(accessToken: string) {
     try {
       const response = await axios.post(`${this._baseGraphApiUrl}/me/subscribed_apps?access_token=${accessToken}`, {
-        subscribed_fields: ['messages', 'messaging_postbacks'],
+        subscribed_fields: ['messages', 'messaging_postbacks', 'comments'],
       })
 
       if (!response?.data?.success) {
@@ -114,7 +114,7 @@ export class InstagramClient {
 
   private _getAccessToken() {
     if (!this._authConfig?.accessToken) {
-      throw new RuntimeError('The Instagram meta client is messing the accessToken')
+      throw new RuntimeError('The Instagram meta client is missing the accessToken')
     }
 
     return this._authConfig.accessToken
@@ -128,15 +128,13 @@ export class InstagramClient {
     return this._authConfig.instagramId
   }
 
-  public async sendMessage(toInstagramId: string, message: any) {
+  public async sendMessage(toInstagramId: InstagramRecipientId, message: any) {
     const url = `${this._baseGraphApiUrl}/${this._version}/${this._getInstagramId()}/messages`
 
     const response = await axios.post<{ recipient_id: string; message_id: string }>(
       url,
       {
-        recipient: {
-          id: toInstagramId,
-        },
+        recipient: toInstagramId,
         message,
       },
       {
@@ -149,13 +147,13 @@ export class InstagramClient {
     return response.data
   }
 
-  public async sendTextMessage(toInstagramId: string, text: string) {
+  public async sendTextMessage(toInstagramId: InstagramRecipientId, text: string) {
     return this.sendMessage(toInstagramId, {
       text,
     })
   }
 
-  public async sendImageMessage(toInstagramId: string, imageUrl: string) {
+  public async sendImageMessage(toInstagramId: InstagramRecipientId, imageUrl: string) {
     return this.sendMessage(toInstagramId, {
       attachment: {
         type: 'image',
@@ -166,7 +164,7 @@ export class InstagramClient {
     })
   }
 
-  public async sendAudioMessage(toInstagramId: string, audioUrl: string) {
+  public async sendAudioMessage(toInstagramId: InstagramRecipientId, audioUrl: string) {
     return this.sendMessage(toInstagramId, {
       attachment: {
         type: 'audio',
@@ -177,7 +175,7 @@ export class InstagramClient {
     })
   }
 
-  public async sendVideoMessage(toInstagramId: string, videoUrl: string) {
+  public async sendVideoMessage(toInstagramId: InstagramRecipientId, videoUrl: string) {
     return this.sendMessage(toInstagramId, {
       attachment: {
         type: 'video',
@@ -188,7 +186,7 @@ export class InstagramClient {
     })
   }
 
-  public async sendFileMessage(toInstagramId: string, fileUrl: string) {
+  public async sendFileMessage(toInstagramId: InstagramRecipientId, fileUrl: string) {
     return this.sendMessage(toInstagramId, {
       attachment: {
         type: 'file',
@@ -198,37 +196,85 @@ export class InstagramClient {
       },
     })
   }
+
+  public async replyToComment(commentId: string, text: string) {
+    const fields = new URLSearchParams({
+      message: text,
+    })
+    const url = `${this._baseGraphApiUrl}/${this._version}/${commentId}/replies?${fields.toString()}`
+    const response = await axios.post<{ id: string }>(
+      url,
+      {},
+      {
+        headers: {
+          Authorization: 'Bearer ' + this._getAccessToken(),
+        },
+      }
+    )
+
+    const { id } = z
+      .object({
+        id: z.string(),
+      })
+      .parse(response.data)
+
+    return { message_id: id }
+  }
 }
 
-export async function getCredentials(
-  client: bp.Client,
-  ctx: bp.Context
-): Promise<{ instagramId?: string; accessToken: string }> {
+type GetCredentialsOutput = Required<InstagramClientConfig>
+export async function getCredentials(client: bp.Client, ctx: bp.Context): Promise<GetCredentialsOutput> {
+  let credentials: GetCredentialsOutput
   if (ctx.configurationType === 'manual') {
-    return {
-      instagramId: ctx.configuration.instagramId || '',
-      accessToken: ctx.configuration.accessToken || '',
+    credentials = {
+      instagramId: ctx.configuration.instagramId,
+      accessToken: ctx.configuration.accessToken,
+    }
+  } else if (ctx.configurationType === 'sandbox') {
+    credentials = {
+      instagramId: bp.secrets.SANDBOX_INSTAGRAM_ID,
+      accessToken: bp.secrets.SANDBOX_ACCESS_TOKEN,
+    }
+  } else {
+    const {
+      state: {
+        payload: { accessToken, instagramId },
+      },
+    } = await client.getState({ type: 'integration', name: 'oauth', id: ctx.integrationId }).catch((err) => {
+      throw new RuntimeError(`Could not get OAuth credentials, please reauthorize (${err})`)
+    })
+    credentials = {
+      instagramId,
+      accessToken,
     }
   }
 
-  // Otherwise use the page token obtained from the OAuth flow and stored in the state
-  const { state } = await client.getState({ type: 'integration', name: 'oauth', id: ctx.integrationId })
-
-  if (!state.payload.accessToken) {
-    throw new RuntimeError('There is no access token, please reauthorize')
-  }
-
-  return {
-    instagramId: state.payload.instagramId,
-    accessToken: state.payload.accessToken,
-  }
+  return credentials
 }
 
 export function getVerifyToken(ctx: bp.Context): string {
-  // Should normally be verified in the fallbackHandler script with OAuth
-  return ctx.configurationType === 'manual' ? ctx.configuration.verifyToken : bp.secrets.VERIFY_TOKEN
+  // Should normally be verified in the fallbackHandler script with OAuth and Sandbox
+  let verifyToken: string
+  if (ctx.configurationType === 'manual') {
+    verifyToken = ctx.configuration.verifyToken
+  } else if (ctx.configurationType === 'sandbox') {
+    verifyToken = bp.secrets.SANDBOX_VERIFY_TOKEN
+  } else {
+    verifyToken = bp.secrets.VERIFY_TOKEN
+  }
+
+  return verifyToken
 }
 
-export function getClientSecret(ctx: bp.Context): string {
-  return ctx.configurationType === 'manual' ? ctx.configuration.clientSecret : bp.secrets.CLIENT_SECRET
+export function getClientSecret(ctx: bp.Context): string | undefined {
+  let value: string | undefined
+  if (ctx.configurationType === 'manual') {
+    value = ctx.configuration.clientSecret
+  } else if (ctx.configurationType === 'sandbox') {
+    value = bp.secrets.SANDBOX_CLIENT_SECRET
+  } else {
+    value = bp.secrets.CLIENT_SECRET
+  }
+
+  return value?.length ? value : undefined
 }

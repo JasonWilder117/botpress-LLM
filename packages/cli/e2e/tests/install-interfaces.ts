@@ -1,5 +1,5 @@
 import pathlib from 'path'
-import impl from '../../src/command-implementations'
+import impl from '../../src'
 import defaults from '../defaults'
 import { Test } from '../typings'
 import * as utils from '../utils'
@@ -26,9 +26,9 @@ export const installAllInterfaces: Test = {
       'listable',
       'llm',
       'readable',
-      'speechToText',
-      'textToImage',
-      'typingIndicator',
+      'speech-to-text',
+      'text-to-image',
+      'typing-indicator',
       'updatable',
     ]
 
@@ -38,9 +38,9 @@ export const installAllInterfaces: Test = {
         .add({
           ...argv,
           packageRef: iface,
-          packageType: 'interface',
           installPath: baseDir,
           useDev: false,
+          alias: undefined,
         })
         .then(utils.handleExitCode)
       // TODO: also run a type check on the installed interface

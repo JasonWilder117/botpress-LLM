@@ -1,13 +1,23 @@
+import { posthogHelper } from '@botpress/common'
 import { z, IntegrationDefinition, messages } from '@botpress/sdk'
-import { sentry as sentryHelpers } from '@botpress/sdk-addons'
 import proactiveConversation from 'bp_modules/proactive-conversation'
 import proactiveUser from 'bp_modules/proactive-user'
+import { dmChannelMessages } from './definitions/channel'
 
 export const INTEGRATION_NAME = 'instagram'
+export const INTEGRATION_VERSION = '4.1.9'
+
+const commonConfigSchema = z.object({
+  replyToComments: z
+    .boolean()
+    .default(false)
+    .title('Reply to Comments')
+    .describe('If enabled, the bot will reply to comments on posts.'),
+})
 
 export default new IntegrationDefinition({
   name: INTEGRATION_NAME,
-  version: '2.1.1',
+  version: INTEGRATION_VERSION,
   title: 'Instagram',
   description: 'Automate interactions, manage comments, and send/receive messages all in real-time.',
   icon: 'icon.svg',
@@ -16,30 +26,40 @@ export default new IntegrationDefinition({
     identifier: {
       linkTemplateScript: 'linkTemplate.vrl',
     },
-    schema: z.object({}),
+    schema: commonConfigSchema,
   },
   configurations: {
     manual: {
       title: 'Manual Configuration',
       description: 'Configure by manually supplying the Meta app details',
-      schema: z.object({
-        clientSecret: z
-          .string()
-          .secret()
-          .title('Client Secret')
-          .describe('Instagram App secret from API setup View used for webhook signature check'),
-        verifyToken: z
-          .string()
-          .secret()
-          .title('Verify Token')
-          .describe('Token used for verifying the Callback URL at API setup View'),
-        accessToken: z
-          .string()
-          .secret()
-          .title('Access token')
-          .describe('Access Token for the Instagram Account from the API setup View'),
-        instagramId: z.string().title('Instagram account ID').describe('Instagram Account Id from API setup View'),
-      }),
+      schema: z
+        .object({
+          clientSecret: z
+            .string()
+            .secret()
+            .title('Client Secret')
+            .describe('Instagram App secret from API setup View used for webhook signature check'),
+          verifyToken: z
+            .string()
+            .secret()
+            .title('Verify Token')
+            .describe('Token used for verifying the Callback URL at API setup View'),
+          accessToken: z
+            .string()
+            .secret()
+            .title('Access token')
+            .describe('Access Token for the Instagram Account from the API setup View'),
+          instagramId: z.string().title('Instagram account ID').describe('Instagram Account Id from API setup View'),
+        })
+        .merge(commonConfigSchema),
+    },
+    sandbox: {
+      title: 'Sandbox Configuration',
+      description: 'Sandbox configuration, for testing purposes only',
+      schema: z.object({}),
+      identifier: {
+        linkTemplateScript: 'sandboxLinkTemplate.vrl',
+      },
     },
   },
   states: {
@@ -69,7 +89,7 @@ export default new IntegrationDefinition({
     channel: {
       title: 'Direct Message',
       description: 'Direct message conversation between an Instagram user and the bot',
-      messages: { ...messages.defaults, markdown: messages.markdown },
+      messages: dmChannelMessages,
       message: {
         tags: {
           id: {
@@ -84,6 +104,10 @@ export default new IntegrationDefinition({
             title: 'Recipient ID',
             description: 'The Instagram user ID of the message recipient',
           },
+          commentId: {
+            title: 'Comment ID',
+            description: 'The Instagram comment ID under which the direct message conversation was started',
+          },
         },
       },
       conversation: {
@@ -92,6 +116,49 @@ export default new IntegrationDefinition({
             title: 'Conversation ID',
             description: 'The Instagram user ID of the user in the conversation',
           },
+          commentId: {
+            title: 'Comment ID',
+            description: 'The Instagram comment ID under which the direct message conversation was started',
+          },
+          lastCommentId: {
+            title: 'Last Comment ID',
+            description: 'The Instagram comment ID of the last comment from which a direct message was sent',
+          },
+        },
+      },
+    },
+    commentReplies: {
+      title: 'Comment Replies',
+      description: 'Replies to comments on an Instagram post',
+      messages: {
+        text: messages.defaults.text,
+      },
+      message: {
+        tags: {
+          id: {
+            title: 'Comment ID',
+            description: 'The unique ID of the comment',
+          },
+          postId: {
+            title: 'Post ID',
+            description: 'The Instagram post ID where the comment was posted',
+          },
+        },
+      },
+      conversation: {
+        tags: {
+          id: {
+            title: 'Comment ID',
+            description: 'The Instagram comment ID under which the reply was posted',
+          },
+          postId: {
+            title: 'Post ID',
+            description: 'The Instagram post ID where the comment was posted',
+          },
+          userId: {
+            title: 'User ID',
+            description: 'The Instagram user ID of the user who sent the comment',
+          },
         },
       },
     },
@@ -99,15 +166,27 @@ export default new IntegrationDefinition({
   actions: {},
   events: {},
   secrets: {
-    ...sentryHelpers.COMMON_SECRET_NAMES,
+    ...posthogHelper.COMMON_SECRET_NAMES,
     CLIENT_ID: {
-      description: 'The client ID of your Meta app.',
+      description: 'The client ID of the OAuth Meta app.',
     },
     CLIENT_SECRET: {
-      description: 'The client secret of your Meta app.',
+      description: 'The client secret of the OAuth Meta app.',
     },
     VERIFY_TOKEN: {
-      description: 'The verify token of your Meta app.',
+      description: 'The verify token of the OAuth Meta app.',
+    },
+    SANDBOX_CLIENT_SECRET: {
+      description: 'The client secret of the Sandbox Meta app',
+    },
+    SANDBOX_VERIFY_TOKEN: {
+      description: 'The verify token for the Sandbox Meta App Webhooks subscription',
+    },
+    SANDBOX_ACCESS_TOKEN: {
+      description: 'Access token for the Sandbox Meta App',
+    },
+    SANDBOX_INSTAGRAM_ID: {
+      description: 'Instagram ID for the Sandbox Instagram profile',
     },
   },
   user: {
@@ -135,10 +214,20 @@ export default new IntegrationDefinition({
       schema: z
         .object({
           id: z.string().title('User ID').describe('The Instagram user ID of the user in the conversation'),
+          commentId: z
+            .string()
+            .optional()
+            .title('Comment ID')
+            .describe('The Instagram comment ID under which the direct message conversation was started'),
         })
         .title('Conversation')
         .describe('The conversation object fields'),
     },
+  },
+  attributes: {
+    category: 'Communication & Channels',
+    guideSlug: 'instagram',
+    repo: 'botpress',
   },
 })
   .extend(proactiveUser, ({ entities }) => ({

@@ -1,36 +1,44 @@
-/* bplint-disable */
-import { z, IntegrationDefinition, messages } from '@botpress/sdk'
+import { z, IntegrationDefinition } from '@botpress/sdk'
 import { sentry as sentryHelpers } from '@botpress/sdk-addons'
 import typingIndicator from './bp_modules/typing-indicator'
+import { telegramMessageChannels } from './definitions/channels'
 
 export default new IntegrationDefinition({
   name: 'telegram',
-  version: '0.7.0',
+  version: '1.0.7',
   title: 'Telegram',
   description: 'Engage with your audience in real-time.',
   icon: 'icon.svg',
   readme: 'hub.md',
   configuration: {
     schema: z.object({
-      botToken: z.string().min(1),
+      botToken: z.string().min(1).describe('Bot Token').title('Bot Token'),
+      typingIndicatorEmoji: z
+        .boolean()
+        .default(false)
+        .title('Typing Indicator Emoji')
+        .describe('Temporarily add an emoji reaction to received messages to indicate when bot is processing message'),
     }),
   },
   channels: {
     channel: {
-      messages: {
-        ...messages.defaults,
-        markdown: messages.markdown,
-        audio: {
-          ...messages.defaults.audio,
-          schema: messages.defaults.audio.schema.extend({
-            caption: z.string().optional().describe('The caption/transcription of the audio message'),
-          }),
+      title: 'Channel',
+      description: 'Telegram Channel',
+      messages: telegramMessageChannels,
+      message: {
+        tags: {
+          id: { title: 'ID', description: 'The message id' },
+          chatId: { title: 'Chat ID', description: 'The message Chat id' },
         },
       },
-      message: { tags: { id: {}, chatId: {} } },
       conversation: {
-        tags: { id: {}, fromUserId: {}, fromUserUsername: {}, fromUserName: {}, chatId: {} },
-        creation: { enabled: true, requiredTags: ['id'] },
+        tags: {
+          id: { title: 'ID', description: 'The conversation ID' },
+          fromUserId: { title: 'From User ID', description: 'The conversation From User id' },
+          fromUserUsername: { title: 'From User UserName', description: 'The converstation from user username' },
+          fromUserName: { title: 'From User Name', description: 'The conversation from user name' },
+          chatId: { title: 'Chat ID', description: 'The conversation Chat id' },
+        },
       },
     },
   },
@@ -39,9 +47,13 @@ export default new IntegrationDefinition({
   secrets: sentryHelpers.COMMON_SECRET_NAMES,
   user: {
     tags: {
-      id: {},
+      id: { title: 'ID', description: 'The id of the user' },
     },
-    creation: { enabled: true, requiredTags: ['id'] },
+  },
+  attributes: {
+    category: 'Communication & Channels',
+    guideSlug: 'telegram',
+    repo: 'botpress',
   },
 }).extend(typingIndicator, () => ({
   entities: {},

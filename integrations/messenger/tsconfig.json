@@ -3,9 +3,8 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "baseUrl": ".",
-    "outDir": "dist",
-    "types": ["preact"]
+    "paths": { "*": ["./*"] },
+    "outDir": "dist"
   },
-  "include": [".botpress/**/*", "src/**/*", "integration.definition.ts"]
+  "include": [".botpress/**/*", "definitions/**/*", "src/**/*", "*.ts"]
 }

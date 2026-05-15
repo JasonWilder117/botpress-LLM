@@ -1,8 +1,11 @@
 import type * as esbuild from 'esbuild'
+import { SchemaTransformOptions } from '../../common/types'
+import { DefinitionError } from '../../errors'
 import { resolveInterface } from '../../interface/resolve'
 import { InterfacePackage } from '../../package'
 import * as utils from '../../utils'
-import { mergeObjectSchemas, z } from '../../zui'
+import { SDK_VERSION } from '../../version'
+import { z } from '../../zui'
 import { SchemaStore, BrandedSchema, createStore, isBranded, getName } from './branded-schema'
 import { BaseConfig, BaseEvents, BaseActions, BaseChannels, BaseStates, BaseEntities, BaseConfigs } from './generic'
 import {
@@ -40,6 +43,8 @@ export type IntegrationDefinitionProps<
   icon?: string
   readme?: string
 
+  attributes?: Record<string, string>
+
   identifier?: {
     extractScript?: string
     fallbackHandlerScript?: string
@@ -74,8 +79,9 @@ export type IntegrationDefinitionProps<
 
   interfaces?: Record<string, InterfaceExtension>
 
-  __advanced?: {
+  __advanced?: SchemaTransformOptions & {
     esbuild?: Partial<esbuild.BuildOptions>
+    extraOperations?: Record<string, { enabled: boolean }>
   }
 }
 
@@ -100,12 +106,12 @@ type ChannelsOfPackage<TPackage extends InterfacePackage> = {
 }
 
 export type ActionOverrideProps = utils.types.AtLeastOneProperty<
-  Pick<Required<ActionDefinition>, 'title' | 'description' | 'billable' | 'cacheable'> & {
+  Pick<Required<ActionDefinition>, 'title' | 'description' | 'billable' | 'cacheable' | 'attributes'> & {
     name: string
   }
 >
 export type EventOverrideProps = utils.types.AtLeastOneProperty<
-  Pick<Required<EventDefinition>, 'title' | 'description'> & {
+  Pick<Required<EventDefinition>, 'title' | 'description' | 'attributes'> & {
     name: string
   }
 >
@@ -198,6 +204,8 @@ export class IntegrationDefinition<
   public readonly entities: this['props']['entities']
   public readonly interfaces: this['props']['interfaces']
   public readonly __advanced: this['props']['__advanced']
+  public readonly attributes: this['props']['attributes']
+
   public constructor(
     public readonly props: IntegrationDefinitionProps<
       TName,
@@ -229,6 +237,11 @@ export class IntegrationDefinition<
     this.entities = props.entities
     this.interfaces = props.interfaces
     this.__advanced = props.__advanced
+    this.attributes = props.attributes
+  }
+
+  public get metadata() {
+    return { sdkVersion: SDK_VERSION } as const
   }
 
   public extend<P extends InterfacePackage>(
@@ -304,7 +317,7 @@ export class IntegrationDefinition<
     const unbrandedEntity = utils.records.pairs(extensionBuilderOutput.entities).find(([_k, e]) => !isBranded(e))
     if (unbrandedEntity) {
       // this means the user tried providing a plain schema without referencing an entity from the integration
-      throw new Error(
+      throw new DefinitionError(
         `Cannot extend interface "${interfacePkg.name}" with entity "${unbrandedEntity[0]}"; the provided schema is not part of the integration's entities.`
       )
     }
@@ -325,10 +338,10 @@ export class IntegrationDefinition<
       ...a,
       ...b,
       input: {
-        schema: mergeObjectSchemas(a.input.schema, b.input.schema),
+        schema: this._mergeObjectSchemas(a.input.schema, b.input.schema),
       },
       output: {
-        schema: mergeObjectSchemas(a.input.schema, b.output.schema),
+        schema: this._mergeObjectSchemas(a.output.schema, b.output.schema),
       },
     }
   }
@@ -337,7 +350,7 @@ export class IntegrationDefinition<
     return {
       ...a,
       ...b,
-      schema: mergeObjectSchemas(a.schema, b.schema),
+      schema: this._mergeObjectSchemas(a.schema, b.schema),
     }
   }
 
@@ -375,7 +388,23 @@ export class IntegrationDefinition<
 
   private _mergeMessage = (a: MessageDefinition, b: MessageDefinition): MessageDefinition => {
     return {
-      schema: mergeObjectSchemas(a.schema, b.schema),
+      schema: this._mergeObjectSchemas(a.schema, b.schema),
     }
+  }
+
+  private _mergeObjectSchemas = (a: z.ZuiObjectSchema, b: z.ZuiObjectSchema): z.ZuiObjectSchema => {
+    const aDef = a._def
+    const bDef = b._def
+
+    if (aDef.typeName === 'ZodObject' && bDef.typeName === 'ZodObject') {
+      const aShape = aDef.shape()
+      const bShape = bDef.shape()
+      return z.object({ ...aShape, ...bShape })
+    }
+    if (aDef.typeName === 'ZodRecord' && bDef.typeName === 'ZodRecord') {
+      return z.record(z.intersection(aDef.valueType, bDef.valueType))
+    }
+    // TODO: adress this case
+    throw new Error('Cannot merge object schemas with record schemas')
   }
 }

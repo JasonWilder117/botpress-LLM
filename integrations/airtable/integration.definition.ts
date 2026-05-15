@@ -1,4 +1,3 @@
-/* bplint-disable */
 import { z, IntegrationDefinition } from '@botpress/sdk'
 import {
   createRecordInputSchema,
@@ -20,19 +19,14 @@ export default new IntegrationDefinition({
   title: 'Airtable',
   description:
     'Access and manage Airtable data to allow your chatbot to retrieve details, update records, and organize information.',
-  version: '0.0.4',
+  version: '3.0.0',
   readme: 'hub.md',
   icon: 'icon.svg',
   configuration: {
-    schema: z.object({
-      accessToken: z.string().describe('Personal Access Token'),
-      baseId: z.string().describe('Base ID'),
-      endpointUrl: z
-        .string()
-        .optional()
-        .default('https://api.airtable.com/v0/')
-        .describe('API endpoint to hit (Default: https://api.airtable.com/v0/)'),
-    }),
+    identifier: {
+      linkTemplateScript: 'linkTemplate.vrl',
+    },
+    schema: z.object({}),
   },
   channels: {},
   user: {
@@ -40,7 +34,8 @@ export default new IntegrationDefinition({
   },
   actions: {
     getTableRecords: {
-      title: 'Get Records of the Table',
+      title: 'Get Table Records',
+      description: 'Get Records of the Table',
       input: {
         schema: getTableRecordsInputSchema,
       },
@@ -50,6 +45,7 @@ export default new IntegrationDefinition({
     },
     createTable: {
       title: 'Create Table',
+      description: 'Creates a new table and returns the schema for the newly created table.',
       input: {
         schema: createTableInputSchema,
       },
@@ -59,6 +55,7 @@ export default new IntegrationDefinition({
     },
     updateTable: {
       title: 'Update Table',
+      description: 'Updates the name, description, and/or date dependency settings of a table.',
       input: {
         schema: updateTableInputSchema,
       },
@@ -68,6 +65,7 @@ export default new IntegrationDefinition({
     },
     createRecord: {
       title: 'Create Record',
+      description: 'Create a record',
       input: {
         schema: createRecordInputSchema,
       },
@@ -77,6 +75,7 @@ export default new IntegrationDefinition({
     },
     updateRecord: {
       title: 'Update Record',
+      description: 'Updates a single record.',
       input: {
         schema: updateRecordInputSchema,
       },
@@ -86,6 +85,7 @@ export default new IntegrationDefinition({
     },
     listRecords: {
       title: 'List Records',
+      description: 'List records in a table.',
       input: {
         schema: listRecordsInputSchema,
       },
@@ -95,5 +95,48 @@ export default new IntegrationDefinition({
     },
   },
   events: {},
-  states: {},
+  states: {
+    oAuthCredentials: {
+      type: 'integration',
+      schema: z.object({
+        accessToken: z.string().secret().describe('The OAuth access token'),
+        refreshToken: z.string().secret().describe('The rotating OAuth refresh token'),
+        expiresAt: z.string().datetime().describe('The timestamp of when the access token expires'),
+        refreshExpiresAt: z.string().datetime().describe('The timestamp of when the refresh token expires'),
+        scopes: z.array(z.string()).describe('The scopes granted to the token'),
+      }),
+    },
+    manualCredentials: {
+      type: 'integration',
+      schema: z.object({
+        personalAccessToken: z.string().secret().describe('The Airtable Personal Access Token'),
+      }),
+    },
+    oauthPkce: {
+      type: 'integration',
+      schema: z.object({
+        codeVerifier: z.string().describe('The PKCE code verifier paired with the in-flight authorization request'),
+        createdAt: z.string().datetime().describe('The timestamp of when the code verifier was issued'),
+      }),
+    },
+    configuration: {
+      type: 'integration',
+      schema: z.object({
+        baseId: z.string().describe('The selected Airtable base ID'),
+        endpointUrl: z.string().optional().describe('Optional override for the Airtable API endpoint'),
+      }),
+    },
+  },
+  secrets: {
+    CLIENT_ID: {
+      description: 'The client ID of the Airtable OAuth app.',
+    },
+    CLIENT_SECRET: {
+      description: 'The client secret of the Airtable OAuth app.',
+    },
+  },
+  attributes: {
+    category: 'Project Management',
+    repo: 'botpress',
+  },
 })

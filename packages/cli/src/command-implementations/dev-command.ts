@@ -1,11 +1,13 @@
 import type * as client from '@botpress/client'
-import type * as sdk from '@botpress/sdk'
+import * as sdk from '@botpress/sdk'
 import { TunnelRequest, TunnelResponse } from '@bpinternal/tunnel'
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios'
 import chalk from 'chalk'
+import { isEqual } from 'lodash'
 import * as pathlib from 'path'
 import * as uuid from 'uuid'
 import * as apiUtils from '../api'
+import { secretEnvVariableName, stripSecretEnvVariablePrefix } from '../code-generation/secret-module'
 import type commandDefinitions from '../command-definitions'
 import * as errors from '../errors'
 import * as tables from '../tables'
@@ -17,22 +19,40 @@ import { ProjectCommand, ProjectDefinition } from './project-command'
 const DEFAULT_BOT_PORT = 8075
 const DEFAULT_INTEGRATION_PORT = 8076
 const TUNNEL_HELLO_INTERVAL = 5000
-const FILEWATCHER_DEBOUNCE_MS = 2000
+const FILEWATCHER_DEBOUNCE_MS = 500
 
 export type DevCommandDefinition = typeof commandDefinitions.dev
 export class DevCommand extends ProjectCommand<DevCommandDefinition> {
   private _initialDef: ProjectDefinition | undefined = undefined
+  private _deployedIntegrationName: string | undefined = undefined
+  private _cacheDevRequestBody: apiUtils.UpdateBotRequestBody | apiUtils.UpdateIntegrationRequestBody | undefined
+  private _buildContext: utils.esbuild.BuildCodeContext
+
+  public constructor(...args: ConstructorParameters<typeof ProjectCommand<DevCommandDefinition>>) {
+    super(...args)
+    this._buildContext = new utils.esbuild.BuildCodeContext()
+  }
 
   public async run(): Promise<void> {
     this.logger.warn('This command is experimental and subject to breaking changes without notice.')
 
-    const api = await this.ensureLoginAndCreateClient(this.argv)
+    let api = await this.ensureLoginAndCreateClient(this.argv)
 
-    const projectDef = await this.readProjectDefinitionFromFS()
-    if (projectDef.type === 'interface') {
+    const { projectType, resolveProjectDefinition } = this.readProjectDefinitionFromFS()
+    if (projectType === 'interface') {
       throw new errors.BotpressCLIError('This feature is not available for interfaces.')
     }
+    const projectDef = await resolveProjectDefinition()
     this._initialDef = projectDef
+
+    if (projectDef.type === 'integration') {
+      const handleResult = await this.manageWorkspaceHandle(api, projectDef.definition)
+      if (!handleResult) return
+      if (handleResult.workspaceId) {
+        api = api.switchWorkspace(handleResult.workspaceId)
+      }
+      this._deployedIntegrationName = handleResult.integration.name
+    }
 
     let env: Record<string, string> = {
       ...process.env,
@@ -40,12 +60,20 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
       BP_TOKEN: api.token,
     }
 
-    let defaultPort = DEFAULT_BOT_PORT
-    if (this._initialDef.type === 'integration') {
-      defaultPort = DEFAULT_INTEGRATION_PORT
-      // TODO: store secrets in local cache to avoid prompting every time
-      const secretEnvVariables = await this.promptSecrets(this._initialDef.definition, this.argv, { formatEnv: true })
+    const defaultPort = this._initialDef.type === 'integration' ? DEFAULT_INTEGRATION_PORT : DEFAULT_BOT_PORT
+    if (this._initialDef.type === 'integration' || this._initialDef.type === 'bot') {
+      const knownSecrets = await this._readKnownSecretsFromCache()
+      let secretEnvVariables = await this.promptSecrets(this._initialDef.definition, this.argv, {
+        knownSecrets: Object.keys(knownSecrets),
+        formatEnv: true,
+      })
+      secretEnvVariables = { ...this._applyPrefixToSecrets(knownSecrets), ...secretEnvVariables }
       const nonNullSecretEnvVariables = utils.records.filterValues(secretEnvVariables, utils.guards.is.notNull)
+
+      if (!this.argv.noSecretCaching) {
+        await this._writeKnownSecretsToCache(secretEnvVariables)
+      }
+
       env = { ...env, ...nonNullSecretEnvVariables }
     }
 
@@ -56,7 +84,20 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
       throw new errors.BotpressCLIError(`Invalid tunnel URL: ${urlParseResult.error}`)
     }
 
-    const tunnelId = uuid.v4()
+    const cachedTunnelId = await this.projectCache.get('tunnelId')
+
+    let tunnelId: string
+    if (this.argv.tunnelId) {
+      tunnelId = this.argv.tunnelId
+    } else if (cachedTunnelId) {
+      tunnelId = cachedTunnelId
+    } else {
+      tunnelId = uuid.v4()
+    }
+
+    if (cachedTunnelId !== tunnelId) {
+      await this.projectCache.set('tunnelId', tunnelId)
+    }
 
     const { url: parsedTunnelUrl } = urlParseResult
     const isSecured = parsedTunnelUrl.protocol === 'https' || parsedTunnelUrl.protocol === 'wss'
@@ -112,8 +153,8 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
     await supervisor.start()
 
     await this._runBuild()
-    await this._deploy(api, httpTunnelUrl)
     worker = await this._spawnWorker(env, port)
+    await this._deploy(api, httpTunnelUrl)
 
     try {
       const watcher = await utils.filewatcher.FileWatcher.watch(
@@ -124,16 +165,25 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
             return
           }
 
-          const typescriptEvents = events.filter((e) => pathlib.extname(e.path) === '.ts')
-          if (typescriptEvents.length === 0) {
-            return
-          }
+          const typescriptEvents = events
+            .filter((e) => !e.path.startsWith(this.projectPaths.abs.outDir))
+            .filter((e) => pathlib.extname(e.path) === '.ts')
 
-          this.logger.log('Changes detected, rebuilding')
-          await this._restart(api, worker, httpTunnelUrl)
+          const packageJsonEvents = events
+            .filter((e) => !e.path.startsWith(this.projectPaths.abs.outDir))
+            .filter((e) => pathlib.basename(e.path) === 'package.json')
+
+          const distEvents = events.filter((e) => e.path.startsWith(this.projectPaths.abs.distDir))
+
+          if (typescriptEvents.length > 0 || packageJsonEvents.length > 0) {
+            this.logger.log('Changes detected, rebuilding')
+            await this._restart(api, worker, httpTunnelUrl)
+          } else if (distEvents.length > 0) {
+            this.logger.log('Changes detected in output directory, reloading worker')
+            await worker.reload()
+          }
         },
         {
-          ignore: [this.projectPaths.abs.outDir],
           debounceMs: FILEWATCHER_DEBOUNCE_MS,
         }
       )
@@ -163,32 +213,71 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
       return
     }
 
-    await this._deploy(api, tunnelUrl)
     await worker.reload()
+    await this._deploy(api, tunnelUrl)
   }
 
   private _deploy = async (api: apiUtils.ApiClient, tunnelUrl: string) => {
-    const projectDef = await this.readProjectDefinitionFromFS()
+    const { projectType, resolveProjectDefinition } = this.readProjectDefinitionFromFS()
 
-    if (projectDef.type === 'interface') {
+    if (projectType === 'interface') {
       throw new errors.BotpressCLIError('This feature is not available for interfaces.')
     }
-    if (projectDef.type === 'integration') {
+    if (projectType === 'integration' && this._initialDef?.type === 'integration') {
+      const projectDef = await resolveProjectDefinition()
       this._checkSecrets(projectDef.definition)
-      return await this._deployDevIntegration(api, tunnelUrl, projectDef.definition)
+      if (projectDef.definition.name !== this._initialDef.definition.name) {
+        throw new errors.BotpressCLIError(
+          `Integration name changed from "${this._initialDef.definition.name}" to "${projectDef.definition.name}". Renaming integrations during bp dev is not supported. Please restart bp dev.`
+        )
+      }
+      const integrationDef = new sdk.IntegrationDefinition({
+        ...projectDef.definition,
+        name: this._deployedIntegrationName ?? this._initialDef.definition.name,
+      })
+      return await this._deployDevIntegration(api, tunnelUrl, integrationDef)
     }
-    if (projectDef.type === 'bot') {
+    if (projectType === 'bot') {
+      const projectDef = await resolveProjectDefinition()
+      this._checkSecrets(projectDef.definition)
       return await this._deployDevBot(api, tunnelUrl, projectDef.definition)
     }
     throw new errors.UnsupportedProjectType()
   }
 
-  private _checkSecrets(integrationDef: sdk.IntegrationDefinition) {
-    if (this._initialDef?.type !== 'integration') {
+  private async _writeKnownSecretsToCache(secretEnvVariables: Record<string, string | null>) {
+    const knownSecrets: Record<string, string | null> = {}
+    for (const [prefixedSecretName, secretValue] of Object.entries(secretEnvVariables)) {
+      const secretName = stripSecretEnvVariablePrefix(prefixedSecretName)
+      knownSecrets[secretName] = secretValue
+    }
+
+    const nonNullKnownSecrets = utils.records.filterValues(knownSecrets, utils.guards.is.notNull)
+    if (Object.keys(nonNullKnownSecrets).length === 0) {
+      await this.projectCache.rm('secrets')
+      return
+    }
+    await this.projectCache.set('secrets', nonNullKnownSecrets)
+  }
+
+  private async _readKnownSecretsFromCache() {
+    return (await this.projectCache.get('secrets')) ?? {}
+  }
+
+  private _applyPrefixToSecrets(secrets: Record<string, string>): Record<string, string> {
+    const prefixedSecretEntries = Object.entries(secrets).map(([secretName, secretValue]) => [
+      secretEnvVariableName(secretName),
+      secretValue,
+    ])
+    return Object.fromEntries(prefixedSecretEntries)
+  }
+
+  private _checkSecrets(projectDef: sdk.IntegrationDefinition | sdk.BotDefinition) {
+    if (this._initialDef?.type !== 'integration' && this._initialDef?.type !== 'bot') {
       return
     }
     const initialSecrets = this._initialDef?.definition.secrets ?? {}
-    const currentSecrets = integrationDef.secrets ?? {}
+    const currentSecrets = projectDef.secrets ?? {}
     const newSecrets = Object.keys(currentSecrets).filter((s) => !initialSecrets[s])
     if (newSecrets.length > 0) {
       throw new errors.BotpressCLIError('Secrets were added while the server was running. A restart is required.')
@@ -214,7 +303,9 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
   }
 
   private _runBuild() {
-    return new BuildCommand(this.api, this.prompt, this.logger, this.argv).run()
+    return new BuildCommand(this.api, this.prompt, this.logger, this.argv)
+      .setProjectContext(this.projectContext)
+      .run(this._buildContext)
   }
 
   private async _deployDevIntegration(
@@ -309,9 +400,6 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
       await this.projectCache.set('devId', bot.id)
     }
 
-    const updateLine = this.logger.line()
-    updateLine.started('Deploying dev bot...')
-
     const updateBotBody = apiUtils.prepareUpdateBotBody(
       {
         ...(await apiUtils.prepareCreateBotBody(botDef)),
@@ -322,16 +410,38 @@ export class DevCommand extends ProjectCommand<DevCommandDefinition> {
       bot
     )
 
+    if (!(await this._didDefinitionChange(updateBotBody))) {
+      this.logger.log('Skipping deployment step. No changes found in bot.definition.ts')
+      return
+    }
+    const updateLine = this.logger.line()
+    updateLine.started('Deploying dev bot...')
+
     const { bot: updatedBot } = await api.client.updateBot(updateBotBody).catch((thrown) => {
       throw errors.BotpressCLIError.wrap(thrown, 'Could not deploy dev bot')
     })
+
+    this.validateIntegrationRegistration(updatedBot, (failedIntegrations) => {
+      throw new errors.BotpressCLIError(
+        `Some integrations failed to register:\n${Object.entries(failedIntegrations)
+          .map(([key, int]) => `• ${key}: ${int.statusReason}`)
+          .join('\n')}`
+      )
+    })
+
     updateLine.success(`Dev Bot deployed with id "${updatedBot.id}" at "${externalUrl}"`)
     updateLine.commit()
 
     const tablesPublisher = new tables.TablesPublisher({ api, logger: this.logger, prompt: this.prompt })
     await tablesPublisher.deployTables({ botId: updatedBot.id, botDefinition: botDef })
 
-    this.displayWebhookUrls(updatedBot)
+    await this.displayIntegrationUrls({ api, bot: updatedBot })
+  }
+
+  private async _didDefinitionChange(body: apiUtils.UpdateBotRequestBody | apiUtils.UpdateIntegrationRequestBody) {
+    const didChange = !isEqual(body, this._cacheDevRequestBody)
+    this._cacheDevRequestBody = { ...body }
+    return didChange
   }
 
   private _forwardTunnelRequest = async (baseUrl: string, request: TunnelRequest): Promise<TunnelResponse> => {

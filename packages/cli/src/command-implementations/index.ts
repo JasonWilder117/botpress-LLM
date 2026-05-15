@@ -21,7 +21,9 @@ import { LintCommand } from './lint-command'
 import { LoginCommand } from './login-command'
 import { LogoutCommand } from './logout-command'
 import * as plugins from './plugin-commands'
+import * as profiles from './profile-commands'
 import { ReadCommand } from './read-command'
+import { RemoveCommand } from './remove-command'
 import { ServeCommand } from './serve-command'
 
 type GlobalCtor<C extends GlobalCommandDefinition> = new (
@@ -76,7 +78,16 @@ export default {
   serve: getHandler(ServeCommand),
   deploy: getHandler(DeployCommand),
   add: getHandler(AddCommand),
+  remove: getHandler(RemoveCommand),
   dev: getHandler(DevCommand),
   lint: getHandler(LintCommand),
   chat: getHandler(ChatCommand),
+  profiles: {
+    subcommands: {
+      list: getHandler(profiles.ListProfilesCommand),
+      active: getHandler(profiles.ActiveProfileCommand),
+      use: getHandler(profiles.UseProfileCommand),
+      get: getHandler(profiles.GetProfileCommand),
+    },
+  },
 } satisfies ImplementationTree<typeof commandDefinitions>

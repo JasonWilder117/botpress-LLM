@@ -16,7 +16,7 @@ export default new sdk.IntegrationDefinition({
   name: 'todoist',
   title: 'Todoist',
   description: 'Create and modify tasks, post comments and more.',
-  version: '1.0.1',
+  version: '1.0.5',
   readme: 'hub.md',
   icon: 'icon.svg',
   actions,
@@ -29,4 +29,11 @@ export default new sdk.IntegrationDefinition({
   secrets,
   states,
   user,
+  __advanced: {
+    useLegacyZuiTransformer: true,
+  },
+  attributes: {
+    category: 'Project Management',
+    repo: 'botpress',
+  },
 })

@@ -1,7 +1,7 @@
 import { Client } from '@botpress/client'
 import pathlib from 'path'
 import * as uuid from 'uuid'
-import impl from '../../src/command-implementations'
+import impl from '../../src'
 import { ApiBot, fetchAllBots } from '../api'
 import defaults from '../defaults'
 import * as retry from '../retry'
@@ -14,7 +14,7 @@ const fetchBot = async (client: Client, botName: string): Promise<ApiBot | undef
 }
 
 export const createDeployBot: Test = {
-  name: 'cli should allow creating, building, deploying and mannaging a bot',
+  name: 'cli should allow creating, building, deploying and managing a bot',
   handler: async ({ tmpDir, dependencies, ...creds }) => {
     const botpressHomeDir = pathlib.join(tmpDir, '.botpresshome')
     const baseDir = pathlib.join(tmpDir, 'bots')
@@ -42,7 +42,7 @@ export const createDeployBot: Test = {
     await utils.npmInstall({ workDir: botDir }).then(utils.handleExitCode)
     await impl.build({ ...argv, workDir: botDir }).then(utils.handleExitCode)
     await impl.login({ ...argv }).then(utils.handleExitCode)
-    await impl.bots.subcommands.create({ ...argv, name: botName, ifNotExists: false }).then(utils.handleExitCode)
+    await impl.bots.create({ ...argv, name: botName, ifNotExists: false }).then(utils.handleExitCode)
 
     const bot = await fetchBot(client, botName)
     if (!bot) {
@@ -50,7 +50,7 @@ export const createDeployBot: Test = {
     }
 
     await impl.deploy({ ...argv, workDir: botDir, createNewBot: false, botId: bot.id }).then(utils.handleExitCode)
-    await impl.bots.subcommands.delete({ ...argv, botRef: bot.id }).then(utils.handleExitCode)
+    await impl.bots.delete({ ...argv, botRef: bot.id }).then(utils.handleExitCode)
 
     if (await fetchBot(client, botName)) {
       throw new Error(`Bot ${botName} should have been deleted`)

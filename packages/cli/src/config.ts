@@ -1,3 +1,4 @@
+import type { ServerEventsProtocol } from '@botpress/chat'
 import * as consts from './consts'
 import { ProjectTemplates } from './project-templates'
 import type { CommandOption, CommandSchema } from './typings'
@@ -44,7 +45,7 @@ const workspaceId = {
 
 const secrets = {
   type: 'string',
-  description: 'Values for the integration secrets',
+  description: 'Values for the bot or integration secrets',
   array: true,
   default: [],
 } satisfies CommandOption
@@ -55,13 +56,6 @@ const botRef = {
   demandOption: true,
   positional: true,
   idx: 0,
-} satisfies CommandOption
-
-const packageType = {
-  type: 'string',
-  description:
-    'Either an integration or an interface; helps disambiguate the package type in case both an integration and an interface have the same reference.',
-  choices: ['integration', 'interface', 'plugin'] as const,
 } satisfies CommandOption
 
 const packageRef = {
@@ -90,19 +84,21 @@ const pluginRef = {
   description: 'The plugin ID or name and version. Ex: knowledge@0.0.1',
 } satisfies CommandOption
 
-const sourceMap = { type: 'boolean', description: 'Generate sourcemaps', default: false } satisfies CommandOption
+const sourceMap = {
+  type: 'boolean',
+  description: 'Generate sourcemaps',
+  default: false,
+} satisfies CommandOption
 
-const minify = { type: 'boolean', description: 'Minify the bundled code', default: true } satisfies CommandOption
+const minify = {
+  type: 'boolean',
+  description: 'Minify the bundled code',
+  default: true,
+} satisfies CommandOption
 
 const dev = {
   type: 'boolean',
   description: 'List only dev bots / dev integrations',
-  default: false,
-} satisfies CommandOption
-
-const isPublic = {
-  type: 'boolean',
-  description: 'Weither or not to deploy the integration publicly',
   default: false,
 } satisfies CommandOption
 
@@ -130,6 +126,11 @@ const globalSchema = {
     type: 'string',
     description: 'The path to the Botpress home directory',
     default: consts.defaultBotpressHome,
+  },
+  profile: {
+    type: 'string',
+    description: 'The CLI profile defined in the $BP_BOTPRESS_HOME/profiles.json',
+    alias: 'p',
   },
 } satisfies CommandSchema
 
@@ -183,16 +184,35 @@ const deploySchema = {
   botId: { type: 'string', description: 'The bot ID to deploy. Only used when deploying a bot' },
   noBuild,
   dryRun,
-  createNewBot: { type: 'boolean', description: 'Create a new bot when deploying. Only used when deploying a bot' },
+  createNewBot: {
+    type: 'boolean',
+    description: 'Create a new bot when deploying. Only used when deploying a bot',
+  },
   sourceMap,
   minify,
-  public: isPublic,
+  visibility: {
+    type: 'string',
+    choices: ['public', 'private', 'unlisted'] as const,
+    description:
+      'The visibility of the project. By default, projects are always private. Unlisted visibility is only supported for integrations and plugins.',
+    default: 'private',
+  },
+  public: {
+    type: 'boolean',
+    description: 'DEPRECATED: Please use "--visibility public" instead.',
+    default: false,
+    deprecated: true,
+  } satisfies CommandOption,
   allowDeprecated: {
     type: 'boolean',
     description: 'Allow deprecated features in the project',
     default: false,
   },
-} satisfies CommandSchema
+  url: {
+    type: 'string',
+    description: 'Custom URL for the integration. Only used when deploying an integration',
+  },
+} as const satisfies CommandSchema
 
 const devSchema = {
   ...projectSchema,
@@ -206,13 +226,22 @@ const devSchema = {
     description: 'The tunnel HTTP URL to use',
     default: consts.defaultTunnelUrl,
   },
+  tunnelId: {
+    type: 'string',
+    description: 'The tunnel ID to use. The ID will be generated if not specified',
+  },
+  noSecretCaching: {
+    type: 'boolean',
+    description: 'Do not save the secrets locally',
+    default: false,
+    alias: 'nsc',
+  },
 } satisfies CommandSchema
 
 const addSchema = {
   ...globalSchema,
   ...credentialsSchema,
   packageRef,
-  packageType,
   installPath: {
     type: 'string',
     description: 'The path where to install the package',
@@ -222,6 +251,22 @@ const addSchema = {
     type: 'boolean',
     description: 'If a dev version of the package is found, use it',
     default: false,
+  },
+  alias: {
+    type: 'string',
+    description: 'The alias to install the package with',
+  },
+} satisfies CommandSchema
+
+const removeSchema = {
+  ...globalSchema,
+  ...credentialsSchema,
+  workDir,
+  alias: {
+    idx: 0,
+    positional: true,
+    type: 'string',
+    description: 'The alias of the package to uninstall',
   },
 } satisfies CommandSchema
 
@@ -276,6 +321,9 @@ const listIntegrationsSchema = {
   ...credentialsSchema,
   name: { type: 'string', description: 'The name filter when listing integrations' },
   versionNumber: { type: 'string', description: 'The version filter when listing integrations' },
+  owned: { type: 'boolean', description: 'List only owned integrations' },
+  public: { type: 'boolean', description: 'List only public integrations' },
+  limit: { type: 'number', description: 'Limit the number of integrations returned' },
   dev,
 } satisfies CommandSchema
 
@@ -311,6 +359,8 @@ const getPluginSchema = {
 const listPluginsSchema = {
   ...globalSchema,
   ...credentialsSchema,
+  name: { type: 'string', description: 'The name filter when listing plugins' },
+  versionNumber: { type: 'string', description: 'The version filter when listing plugins' },
 } satisfies CommandSchema
 
 const deletePluginSchema = {
@@ -348,6 +398,54 @@ const chatSchema = {
     idx: 0,
     description: 'The bot ID to chat with',
   },
+  protocol: {
+    choices: ['sse', 'websocket'] satisfies ReadonlyArray<ServerEventsProtocol>,
+    default: 'sse' as const,
+    description: 'The protocol to use for long lived connections',
+  },
+} satisfies CommandSchema
+
+const listProfilesSchema = {
+  ...globalSchema,
+  displayToken: {
+    type: 'boolean',
+    description: 'Display the token in each of the bp profiles',
+    default: false,
+  },
+} satisfies CommandSchema
+
+const activeProfileSchema = {
+  ...globalSchema,
+  displayToken: {
+    type: 'boolean',
+    description: 'Display the token in the bp profile',
+    default: false,
+  },
+} satisfies CommandSchema
+
+const useProfileSchema = {
+  ...globalSchema,
+  profileToUse: {
+    type: 'string',
+    description: 'The CLI profile defined in the $BP_BOTPRESS_HOME/profiles.json',
+    positional: true,
+    idx: 0,
+  },
+} satisfies CommandSchema
+
+const getProfileSchema = {
+  ...globalSchema,
+  profileToGet: {
+    type: 'string',
+    description: 'The CLI profile defined in the $BP_BOTPRESS_HOME/profiles.json',
+    positional: true,
+    idx: 0,
+  },
+  displayToken: {
+    type: 'boolean',
+    description: 'Display the token in the bp profile',
+    default: false,
+  },
 } satisfies CommandSchema
 
 // exports
@@ -380,7 +478,12 @@ export const schemas = {
   serve: serveSchema,
   deploy: deploySchema,
   add: addSchema,
+  remove: removeSchema,
   dev: devSchema,
   lint: lintSchema,
   chat: chatSchema,
+  listProfiles: listProfilesSchema,
+  activeProfile: activeProfileSchema,
+  useProfile: useProfileSchema,
+  getProfile: getProfileSchema,
 } as const

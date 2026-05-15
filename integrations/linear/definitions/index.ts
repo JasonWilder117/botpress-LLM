@@ -25,8 +25,12 @@ export const configurations = {
       webhookSigningSecret: z
         .string()
         .secret()
-        .title('Webhook Signing Secret')
-        .describe('The secret key for verifying incoming Linear webhook events'),
+        .optional()
+        .title('Webhook Signing Secret (deprecated)')
+        .describe(
+          'The secret key for verifying incoming Linear webhook events if the webhook has been registered manually. ' +
+            "If you don't provide this value, a webhook will be created automatically."
+        ),
     }),
   },
 } as const satisfies IntegrationDefinitionProps['configurations']
@@ -35,7 +39,7 @@ export const channels = {
   issue: {
     title: 'Issue',
     description: 'A linear issue',
-    messages: { ...messages.defaults, markdown: messages.markdown },
+    messages: { ...messages.defaults, markdown: messages.markdown, bloc: messages.markdownBloc },
     message: {
       tags: {
         id: {
@@ -89,5 +93,10 @@ export const entities = {
     title: 'Issue',
     description: 'A linear issue',
     schema: issueSchema,
+  },
+  issueConversation: {
+    title: 'Issue Conversation',
+    description: 'A conversation representing a linear issue',
+    schema: z.object({ id: z.string().title('Issue ID').describe('The issue ID on Linear') }),
   },
 } as const satisfies IntegrationDefinitionProps['entities']

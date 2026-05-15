@@ -44,8 +44,35 @@ export default {
   read: { description: 'Read and parse an integration definition', schema: config.schemas.read },
   serve: { description: 'Serve your project locally', schema: config.schemas.serve },
   deploy: { description: 'Deploy your project to the cloud', schema: config.schemas.deploy },
-  add: { description: 'Install a package; could be an integration or an interface', schema: config.schemas.add },
+  add: {
+    description: 'Install a package; could be an integration or an interface',
+    schema: config.schemas.add,
+    alias: ['i', 'install'],
+  },
+  remove: {
+    description: "Remove a package from your project's dependencies",
+    schema: config.schemas.remove,
+    alias: 'rm',
+  },
   dev: { description: 'Run your project in dev mode', schema: config.schemas.dev },
   lint: { description: 'EXPERIMENTAL: Lint an integration definition', schema: config.schemas.lint },
   chat: { description: 'EXPERIMENTAL: Chat with a bot directly from the CLI', schema: config.schemas.chat },
+  profiles: {
+    description: 'Commands for using CLI profiles',
+    subcommands: {
+      list: { description: 'List all available profiles', schema: config.schemas.listProfiles, alias: 'ls' },
+      active: {
+        description: 'Get the profile properties you are currently using',
+        schema: config.schemas.activeProfile,
+      },
+      use: {
+        description: 'Set the current profile',
+        schema: config.schemas.useProfile,
+      },
+      get: {
+        description: 'Get a specific profile by name',
+        schema: config.schemas.getProfile,
+      },
+    },
+  },
 } satisfies DefinitionTree
